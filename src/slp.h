@@ -42,7 +42,7 @@ protected:
 class AssignStmt : public Stmt {
 public:
   explicit AssignStmt(string&& id, unique_ptr<Expr>&& expr) noexcept
-      : id_(std::forward<string&&>(id)), expr_(std::move(expr)) {}
+      : id_(std::forward<string>(id)), expr_(std::move(expr)) {}
 
   void print(std::ostream& os) const noexcept override;
 protected:
@@ -65,7 +65,7 @@ class Expr : public BaseElement {
 
 class IdExpr : public Expr {
 public:
-  explicit IdExpr(string&& id) noexcept : id_(std::forward<string&&>(id)) {}
+  explicit IdExpr(string&& id) noexcept : id_(std::forward<string>(id)) {}
   explicit IdExpr(const char* id) noexcept : IdExpr(string(id)) {}
 
   void print(std::ostream& os) const noexcept override;
