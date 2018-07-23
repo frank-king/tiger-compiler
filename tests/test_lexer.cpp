@@ -88,7 +88,7 @@ TEST(lexer_test, lexer_test) {
               Token::ID_("diag1"), Token::LBRACK, Token::ID_("r"), Token::PLUS, Token::ID_("c"), Token::RBRACK, Token::ASSIGN, Token::INT_(0), Token::SEMICOLON,
               Token::ID_("diag2"), Token::LBRACK, Token::ID_("r"), Token::PLUS, Token::INT_(7), Token::MINUS, Token::ID_("c"), Token::RBRACK, Token::ASSIGN, Token::INT_(0), Token::RPAREN,
 
-      Token::IN, Token::ID_("try"), Token::LPAREN, Token::INT_(1), Token::RPAREN,
+      Token::IN, Token::ID_("try"), Token::LPAREN, Token::INT_(0), Token::RPAREN,
       Token::END,
 
       Token::EOF_TOK,

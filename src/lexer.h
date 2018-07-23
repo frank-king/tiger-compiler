@@ -31,15 +31,21 @@ public:
     EOF_TOK, EMPTY
   };
 
-  constexpr Token(Type type) noexcept : type_(type), intValue_(0) {}
-  explicit Token(const Token& other) : type_(other.type_) {
+  Token(Type type) noexcept : type_(type) {
+    switch (type_) {
+    case ID: case STRING: new (&strValue_) string(); break;
+    case INT: intValue_ = 0; break;
+    default: break;
+    }
+  }
+  Token(const Token& other) : type_(other.type_) {
     switch (type_) {
     case ID: case STRING: new (&strValue_) string(other.strValue_); break;
     case INT: intValue_ = other.intValue_; break;
     default: break;
     }
   }
-  explicit Token(Token&& other) : type_(other.type_) {
+  Token(Token&& other) : type_(other.type_) {
     switch (type_) {
     case ID: case STRING: new (&strValue_) string(std::move(other.strValue_)); break;
     case INT: intValue_ = other.intValue_; break;
@@ -60,8 +66,9 @@ public:
   static Token STRING_(const char_t *value) { return Token(STRING, value); }
 
   constexpr const char_t *name() const noexcept { return NAMES[type_]; }
-  bool is(Type type) const { return type_ == type; }
-  bool operator==(const Token &rhs) const {
+  Type type() const noexcept { return type_; }
+  bool is(Type type) const noexcept { return type_ == type; }
+  bool operator==(const Token &rhs) const noexcept {
     if (type_ != rhs.type_)
       return false;
     switch (type_) {
@@ -118,7 +125,7 @@ protected:
       // Special tokens used for the parser
       "EOF", "EMPTY",
   };
-  explicit constexpr Token(Type type, int value) noexcept : type_(type), intValue_(intValue_) {}
+  explicit constexpr Token(Type type, int value) noexcept : type_(type), intValue_(value) {}
   explicit Token(Type type, string value) : type_(type), strValue_(std::move(value)) {}
   explicit Token(Type type, const char_t *value) : type_(type), strValue_(value) {}
 
