@@ -11,7 +11,7 @@
 #include <memory>
 #include <filesystem>
 #include <ostream>
-
+#include <utility>
 namespace fs = std::filesystem;
 using std::string;
 using std::unique_ptr;
@@ -27,12 +27,21 @@ public:
     LT, LE, GT, GE, AND, OR, ASSIGN,
     ARRAY, IF, THEN, ELSE, WHILE, FOR, TO, DO, LET,
     IN, END, OF, BREAK, NIL, FUNCTION, VAR, TYPE,
+    // Special tokens used for the parser
+    EOF_TOK, EMPTY
   };
 
   constexpr Token(Type type) noexcept : type_(type), intValue_(0) {}
   explicit Token(const Token& other) : type_(other.type_) {
     switch (type_) {
-    case ID: case STRING: strValue_ = other.strValue_; break;
+    case ID: case STRING: new (&strValue_) string(other.strValue_); break;
+    case INT: intValue_ = other.intValue_; break;
+    default: break;
+    }
+  }
+  explicit Token(Token&& other) : type_(other.type_) {
+    switch (type_) {
+    case ID: case STRING: new (&strValue_) string(std::move(other.strValue_)); break;
     case INT: intValue_ = other.intValue_; break;
     default: break;
     }
@@ -45,10 +54,10 @@ public:
   }
 
   static Token INT_(int value) noexcept { return Token(INT, value); }
-  static Token ID_(string&& value) { return Token(ID, std::forward<string>(value)); }
-  static Token ID_(const char_t *value) { return ID_(string(value)); }
-  static Token STRING_(string&& value) { return Token(STRING, std::forward<string>(value)); }
-  static Token STRING_(const char_t *value) { return STRING_(string(value)); }
+  static Token ID_(string value) { return Token(ID, std::move(value)); }
+  static Token ID_(const char_t *value) { return Token(ID, value); }
+  static Token STRING_(string value) { return Token(STRING, std::move(value)); }
+  static Token STRING_(const char_t *value) { return Token(STRING, value); }
 
   constexpr const char_t *name() const noexcept { return NAMES[type_]; }
   bool is(Type type) const { return type_ == type; }
@@ -106,10 +115,12 @@ protected:
       "AND", "OR", "ASSIGN", "ARRAY", "IF", "THEN", "ELSE", "WHILE", "FOR",
       "TO", "DO", "LET", "IN", "END", "OF", "BREAK", "NIL", "FUNCTION",
       "VAR", "TYPE",
+      // Special tokens used for the parser
+      "EOF", "EMPTY",
   };
   explicit constexpr Token(Type type, int value) noexcept : type_(type), intValue_(intValue_) {}
-  explicit Token(Type type, string&& value)
-      : type_(type), strValue_(std::forward<string&&>(value)) {}
+  explicit Token(Type type, string value) : type_(type), strValue_(std::move(value)) {}
+  explicit Token(Type type, const char_t *value) : type_(type), strValue_(value) {}
 
   Type type_;
   union {
@@ -120,12 +131,10 @@ protected:
 
 class Lexer {
 public:
-  explicit Lexer(const string& str)
-      : input_(std::make_unique<std::istringstream>(str)) {}
-  explicit Lexer(string&& str)
-      : input_(std::make_unique<std::istringstream>(std::forward<string>(str))) {}
-  explicit Lexer(fs::path&& path)
-      : input_(std::make_unique<std::ifstream>(std::forward<fs::path>(path))) {}
+  explicit Lexer(string str)
+      : input_(std::make_unique<std::istringstream>(std::move(str))) {}
+  explicit Lexer(fs::path path)
+      : input_(std::make_unique<std::ifstream>(std::move(path))) {}
 
   bool eof() noexcept;
   Token nextToken();
@@ -137,7 +146,8 @@ protected:
   int get() noexcept;
   int peek() const noexcept;
   void unget() noexcept;
-  void newline() const;
+  void eatIfNewline(int &cur);
+  void error();
   Token processInt();
   Token processKeywordOrId();
   Token processString();

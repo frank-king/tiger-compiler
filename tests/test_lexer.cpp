@@ -7,7 +7,7 @@
 
 TEST(lexer_test, lexer_test) {
   using namespace tiger::lex;
-  string program = R"(
+  string program(R"(
     /* A program to solve the 8-queens problem */
     let
       var N := 8
@@ -36,12 +36,12 @@ TEST(lexer_test, lexer_test) {
                        row[r]:=0; diag1[r+c]:=0; diag2[r+7-c]:=0)
       in try(0)
     end
-  )";
+  )");
   Lexer lexer(program);
   std::vector<Token> tokens;
   while (!lexer.eof())
     tokens.push_back(lexer.nextToken());
-  std::vector<Token> expected_tokens = {
+  std::vector<Token> expected_tokens{
       Token::LET,
       Token::VAR, Token::ID_("N"), Token::ASSIGN, Token::INT_(8),
       Token::TYPE, Token::ID_("intArray"), Token::EQ, Token::ARRAY, Token::OF, Token::ID_("int"),
@@ -89,10 +89,75 @@ TEST(lexer_test, lexer_test) {
               Token::ID_("diag2"), Token::LBRACK, Token::ID_("r"), Token::PLUS, Token::INT_(7), Token::MINUS, Token::ID_("c"), Token::RBRACK, Token::ASSIGN, Token::INT_(0), Token::RPAREN,
 
       Token::IN, Token::ID_("try"), Token::LPAREN, Token::INT_(1), Token::RPAREN,
-      Token::END
+      Token::END,
+
+      Token::EOF_TOK,
   };
   EXPECT_EQ(tokens.size(), expected_tokens.size());
   for (auto t1 = tokens.cbegin(), t2 = expected_tokens.cbegin();
-      t1 != tokens.cend() && t2 != expected_tokens.cend(); ++t1, ++t2)
+       t1 != tokens.cend() && t2 != expected_tokens.cend(); ++t1, ++t2)
+    EXPECT_EQ(*t1, *t2);
+}
+
+TEST(lexer_test, comment_test) {
+  using namespace tiger::lex;
+  string program(R"(
+    /* comment test */
+    let
+      /* nested /**/ comment *//**/
+      in
+      /* multiline
+       * comment
+       */
+    end
+/* tival comment*/
+/* non-nested comment //// **** */
+  )");
+  Lexer lexer(program);
+  std::vector<Token> tokens;
+  while (!lexer.eof())
+    tokens.push_back(lexer.nextToken());
+  std::vector<Token> expected_tokens{
+      Token::LET,
+      Token::IN,
+      Token::END,
+
+      Token::EOF_TOK,
+  };
+  EXPECT_EQ(tokens.size(), expected_tokens.size());
+  for (auto t1 = tokens.cbegin(), t2 = expected_tokens.cbegin();
+       t1 != tokens.cend() && t2 != expected_tokens.cend(); ++t1, ++t2)
+    EXPECT_EQ(*t1, *t2);
+}
+
+TEST(lexer_test, string_test) {
+  using namespace tiger::lex;
+  string program (R"(
+    /* string test */
+    let
+      var x := ""
+      var a := "ccdeff\"abc\\\"\a\b\t\v\n\r\f\
+
+
+  \ \333\x3F\xFa"
+      in
+    end
+  )");
+  Lexer lexer(program);
+  std::vector<Token> tokens;
+  while (!lexer.eof())
+    tokens.push_back(lexer.nextToken());
+  std::vector<Token> expected_tokens{
+      Token::LET,
+      Token::VAR, Token::ID_("x"), Token::ASSIGN, Token::STRING_(""),
+      Token::VAR, Token::ID_("a"), Token::ASSIGN, Token::STRING_("ccdeff\"abc\\\"\a\b\t\v\n\r\f \333\x3F\xFa"),
+      Token::IN,
+      Token::END,
+
+      Token::EOF_TOK,
+  };
+  EXPECT_EQ(tokens.size(), expected_tokens.size());
+  for (auto t1 = tokens.cbegin(), t2 = expected_tokens.cbegin();
+       t1 != tokens.cend() && t2 != expected_tokens.cend(); ++t1, ++t2)
     EXPECT_EQ(*t1, *t2);
 }

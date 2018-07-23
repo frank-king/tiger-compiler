@@ -5,13 +5,12 @@
 #include "lexer.h"
 
 namespace tiger::lex {
-bool Lexer::eof() noexcept {
-  eatNonTokens();
-  return input_->eof();
-}
+bool Lexer::eof() noexcept { return input_->eof(); }
 Token Lexer::nextToken() {
   // First, process the non-tokens, spaces or comments.
   eatNonTokens();
+  if (eof())
+    return Token::EOF_TOK;
 
   // tok_beg_ = input_->tellg();
   if (auto ch = peek(); isalpha(ch)) {
@@ -37,8 +36,7 @@ void Lexer::eatNonTokens() {
     if (auto ch = get(); isspace(ch)) {
       // Process the spaces.
       do {
-        if (ch == '\n')
-          newline();
+        eatIfNewline(ch);
         ch = get();
         if (input_->eof())
           return;
@@ -48,12 +46,11 @@ void Lexer::eatNonTokens() {
       // Process the comments.
       get();
       for (int count = 1; count > 0;) {
+        eatIfNewline(ch);
         ch = get();
         if (input_->eof())
-          return;
-        if (ch == '\n') // newline
-          newline();
-        else if (ch == '/' && peek() == '*') { // Nested comment
+          error();
+        if (ch == '/' && peek() == '*') { // Nested comment
           ++count;
           get();
         } else if (ch == '*' && peek() == '/') { // Comment ends
@@ -67,9 +64,14 @@ void Lexer::eatNonTokens() {
     }
   }
 }
-void Lexer::newline() const {
-  ++line_;
-  col_ = 1;
+void Lexer::eatIfNewline(int &cur) {
+  if (cur == '\n' || cur == '\r') {
+    if (auto ch = peek(); ch != cur && (ch == '\n' || ch == '\r'))
+      get();
+    cur = peek();
+    ++line_;
+    col_ = 1;
+  }
 }
 
 Token Lexer::processInt() {
@@ -82,6 +84,7 @@ Token Lexer::processInt() {
   unget();
   return Token::INT_(value);
 }
+
 Token Lexer::processKeywordOrId() {
   std::ostringstream buf;
   auto ch = get();
@@ -96,6 +99,7 @@ Token Lexer::processKeywordOrId() {
       return Token(type);
   return Token::ID_(std::move(value));
 }
+
 Token Lexer::processString() {
   std::ostringstream buf;
   auto ch = get();
@@ -107,23 +111,42 @@ Token Lexer::processString() {
       // Escape sequences.
       if (ch = get(); isspace(ch)) {
         // Ignored sequence.
-        while (isspace(ch)) {
-          ch = get();
-          if (ch == '\n')
-            newline();
-          else if (ch == '\\')
+        do {
+          eatIfNewline(ch);
+          if (ch == '\\')
             break;
-        }
-        if (ch != '\\') {
-          // TODO: error in string literal
-        }
-      } else if (isdigit(ch)) {
-        // ASCII code.
+          else if (!isspace(ch))
+            error();
+          ch = get();
+        } while (isspace(ch));
+      } else if (ch >= '0' && ch < '4') {
+        // Octal ASCII code (0-255 in decimal, 0-377 in octal).
         int ord = ch - '0';
-        ord = ord * 10 + get() - '0';
-        ord = ord * 10 + get() - '0';
+        for (int i = 0; i < 2; ++i) {
+          ch = get();
+          if (ch < '0' || ch >= '8')
+            error();
+          ord = ord * 8 + ch - '0';
+        }
         buf << static_cast<char_t>(ord);
-      } else if (ch == '^') {
+      } else if (ch == 'x') {
+        // Hexadecimal ASCII code.
+        int ord = 0;
+        for (int i = 0; i < 2; ++i) {
+          ch = get();
+          ord *= 16;
+          if (ch >= '0' && ch <= '9') {
+            ord += ch - '0';
+          } else if (ch >= 'A' && ch <= 'F') {
+            ord += ch - 'A' + 10;
+          } else if (ch >= 'a' && ch <= 'f') {
+            ord += ch - 'a' + 10;
+          } else {
+            error();
+          }
+        }
+        buf << static_cast<char_t>(ord);
+      } /*else if (ch == '^') {
         // Control characters.
         switch (get()) {
         case '@': buf << '\0'; break; // null
@@ -140,16 +163,36 @@ Token Lexer::processString() {
         }
       } else if (ch == 'n') { buf << '\n'; }
       else if (ch == 't') { buf << '\t'; }
+      else if (ch == 't') { buf << '\t'; }
       else if (ch == '\"') { buf << '\"'; }
       else if (ch == '\\') { buf << '\\'; }
+      */
       else {
-        // TODO: error in string literal
+        switch (ch) {
+        case 'a': buf << '\a'; break;
+        case 'b': buf << '\b'; break;
+        case 'f': buf << '\f'; break;
+        case 'n': buf << '\n'; break;
+        case 'r': buf << '\r'; break;
+        case 't': buf << '\t'; break;
+        case 'v': buf << '\v'; break;
+        case '\"': buf << '\"'; break;
+        case '\\': buf << '\\'; break;
+        default:
+          error();
+        }
       }
     } else {
       // Literal characters.
       buf << static_cast<char_t>(ch);
     }
   }
+  /*
+  if (string&& value = buf.str(); value.empty())
+    return Token::STRING_("");
+  else
+    return Token::STRING_(std::move(value));
+  */
   return Token::STRING_(buf.str());
 }
 Token Lexer::processSymbol() {
@@ -191,6 +234,9 @@ Token Lexer::processSymbol() {
     // TODO: error symbol
     break;
   }
+}
+void Lexer::error() {
+  // TODO: process lexical error.
 }
 
 } // namespace tiger::lex
