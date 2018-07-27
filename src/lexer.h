@@ -38,26 +38,32 @@ public:
     default: break;
     }
   }
-  Token(const Token& other) : type_(other.type_) {
-    switch (type_) {
-    case ID: case STRING: new (&strValue_) string(other.strValue_); break;
-    case INT: intValue_ = other.intValue_; break;
-    default: break;
-    }
-  }
-  Token(Token&& other) : type_(other.type_) {
-    switch (type_) {
-    case ID: case STRING: new (&strValue_) string(std::move(other.strValue_)); break;
-    case INT: intValue_ = other.intValue_; break;
-    default: break;
-    }
-  }
+  Token(const Token& other) { *this = other; }
+  Token(Token&& other) noexcept { *this = std::move(other); }
   ~Token() noexcept {
     switch (type_) {
     case ID: case STRING: strValue_.~string(); break;
     default: break;
     }
   }
+
+  Token& operator=(const Token& other) {
+    switch (type_ = other.type_) {
+    case ID: case STRING: new (&strValue_) string(other.strValue_); break;
+    case INT: intValue_ = other.intValue_; break;
+    default: break;
+    }
+    return *this;
+  }
+  Token& operator=(Token&& other) noexcept {
+    switch (type_ = other.type_) {
+    case ID: case STRING: new (&strValue_) string(std::move(other.strValue_)); break;
+    case INT: intValue_ = other.intValue_; break;
+    default: break;
+    }
+    return *this;
+  }
+
 
   static Token INT_(int value) noexcept { return Token(INT, value); }
   static Token ID_(string value) { return Token(ID, std::move(value)); }
@@ -81,7 +87,7 @@ public:
   friend std::ostream& operator<<(std::ostream& os, const Token& token) {
     os << token.name();
     switch (token.type_) {
-    case ID: os << "(" << token.strValue_ << ")"; break;
+    case ID: os << "(\"" << token.strValue_ << "\")"; break;
     case INT: os << "(" << token.intValue_ << ")"; break;
     case STRING:
       os << "(\"";

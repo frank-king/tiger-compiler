@@ -59,7 +59,8 @@ void Lexer::eatNonTokens() {
         }
       }
     } else {
-      unget();
+      if (!eof())
+        unget();
       break;
     }
   }
@@ -81,7 +82,8 @@ Token Lexer::processInt() {
     value = value * 10 + ch - '0';
     ch = get();
   } while (isdigit(ch));
-  unget();
+  if (!eof())
+    unget();
   return Token::INT_(value);
 }
 
@@ -92,7 +94,8 @@ Token Lexer::processKeywordOrId() {
     buf << static_cast<char_t>(ch);
     ch = get();
   } while (isalnum(ch) || ch == '_');
-  unget();
+  if (!eof())
+    unget();
   string&& value = buf.str();
   for (const auto& [name, type] : Token::KEYWORDS)
     if (value == name)

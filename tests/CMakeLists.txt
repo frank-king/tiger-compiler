@@ -9,6 +9,8 @@ enable_testing()
 set(TEST_SOURCES
         test_slp.cpp
         test_lexer.cpp
+        test_parser.cpp
         )
+set(CMAKE_CXX_FLAGS -DBOOST_LOG_DYN_LINK)
 add_executable(tiger_tests ${TEST_SOURCES} $<TARGET_OBJECTS:libtiger>)
-target_link_libraries(tiger_tests ${GTEST_BOTH_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(tiger_tests ${GTEST_BOTH_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} ${Boost_LIBRARIES})
