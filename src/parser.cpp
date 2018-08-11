@@ -12,7 +12,7 @@ namespace tiger::syntax {
 
 Grammar::Grammar(vector<unique_ptr<Terminal>>&& terms,
                  vector<unique_ptr<NonTerminal>>&& nonterms,
-                 vector<Production>&& prods,
+                 vector<unique_ptr<Production>>&& prods,
                  unordered_map<Token::Type, Terminal*> termTypeHash,
                  NonTerminal *aug,
                  Terminal *eof) noexcept
@@ -23,6 +23,8 @@ Grammar::Grammar(vector<unique_ptr<Terminal>>&& terms,
     termHash_.emplace(terms_[i].get(), i);
   for (size_t i = 0; i < nonterms_.size(); ++i)
     nontermHash_.emplace(nonterms_[i].get(), i);
+  for (size_t i = 0; i < prods_.size(); ++i)
+    prodHash_.emplace(prods_[i].get(), i);
   for (auto [type, term] : termTypeHash) {
     termTypeHash_.emplace(type, termHash_[term]);
   }
@@ -30,10 +32,10 @@ Grammar::Grammar(vector<unique_ptr<Terminal>>&& terms,
   NonTerminal *head = nullptr;
   size_t rangeBegin = 0;
   for (size_t i = 0; i < prods_.size(); ++i) {
-    if (prods_[i].head() != head) {
+    if (prods_[i]->head() != head) {
       if (head)
         prodRanges_[nontermHash_[head]] = std::make_pair(rangeBegin, i);
-      head = prods_[i].head();
+      head = prods_[i]->head();
       rangeBegin = i;
     }
   }
@@ -60,7 +62,7 @@ void Grammar::computeFirsts() {
     for (size_t iProd = begin; iProd < end; ++iProd) {
       const auto& prod = prods_[iProd];
       // If X -> EMPTY, then add EMPTY to FIRST(X).
-      if (prod.body().empty()) {
+      if (prod->body().empty()) {
         firsts_[iNonterm][EMPTY_TERM] = true;
         computed[iNonterm] = true;
         return;
@@ -69,7 +71,7 @@ void Grammar::computeFirsts() {
       // For X ::= X1 X2 X3 ... Xn, if EMPTY is in X[1], X[2], ..., X[i],
       // then recursively compute and add all of the first sets of
       // X[1], X[2], ..., X[i-1] to X.
-      for (const auto& item : prod.body()) {
+      for (const auto& item : prod->body()) {
         if (item->isTerminal()) {
           auto term = dynamic_cast<Terminal *>(item);
           firsts_[iNonterm][termHash_[term]] = true;
@@ -109,7 +111,7 @@ void Grammar::computeFollows() {
   // If there is A ::= a B b, then everything in
   // FIRST(b) except EMPTY is in FOLLOW(B).
   for (auto& prod : prods_) {
-    const auto& prodBody = prod.body();
+    const auto& prodBody = prod->body();
     for (auto i = prodBody.begin(); i < prodBody.end(); ++i) {
       if (auto item = *i; item->isNonTerminal()) {
         size_t iNonterm = nontermHash_[dynamic_cast<NonTerminal*>(item)];
@@ -133,13 +135,13 @@ void Grammar::computeFollows() {
   // If there is A ::= a B, or A ::= a B b, and EMPTY is in FIRST(b),
   // then everything in FOLLOW(A) is in FOLLOW(B).
   for (auto& prod : prods_) {
-    const auto& prodBody = prod.body();
+    const auto& prodBody = prod->body();
     for (auto i = prodBody.rbegin(); i < prodBody.rend(); ++i) {
       auto item = *i;
       if (item->isTerminal())
         break;
 
-      size_t iHeadNonterm = nontermHash_[prod.head()];
+      size_t iHeadNonterm = nontermHash_[prod->head()];
       size_t iNonterm = nontermHash_[dynamic_cast<NonTerminal*>(item)];
       for (size_t iTerm = 0; iTerm < terms_.size(); ++iTerm) {
         if (follows_[iHeadNonterm][iTerm])
@@ -153,9 +155,9 @@ void Grammar::computeFollows() {
 
 Grammar Grammar::Builder::build() noexcept {
   std::stable_sort(
-      prods_.begin(), prods_.end(), [](const Production& a,
-                                           const Production& b) {
-        return a.head()->name() < b.head()->name();
+      prods_.begin(), prods_.end(), [](const unique_ptr<Production>& a,
+                                       const unique_ptr<Production>& b) {
+        return a->head()->name() < b->head()->name();
   });
   return Grammar(std::move(terms_), std::move(nonterms_), std::move(prods_),
                  std::move(termHash_), aug_, term(Token::EOF_TOK));
@@ -202,7 +204,7 @@ size_t LRParser::state(vector<GrammarItem *>&& items) {
 }
 
 LR0Item *SLRParser::item(const Production *prod, size_t index) {
-  auto iProd = static_cast<size_t>(prod - grammar_->productions().data());
+  auto iProd = static_cast<size_t>(grammar_->indexOfProd(const_cast<Production*>(prod)));
   return itemTable_[iProd][index];
   // if (auto& item = itemTable_[iProd][index])
   //   return item;
@@ -214,9 +216,9 @@ LR0Item *SLRParser::item(const Production *prod, size_t index) {
 void SLRParser::yieldItems() {
   for (const auto& prod : grammar_->productions()) {
     itemTable_.emplace_back();
-    for (size_t i = 0; i < prod.body().size() + 1; ++i)
+    for (size_t i = 0; i < prod->body().size() + 1; ++i)
       itemTable_.back().emplace_back(
-          dynamic_cast<LR0Item*>(items_.emplace_back(new LR0Item(&prod, i)).get()));
+          dynamic_cast<LR0Item*>(items_.emplace_back(new LR0Item(prod.get(), i)).get()));
   }
   for (size_t i = 0; i < items_.size(); ++i) {
     itemHash_.emplace(items_[i].get(), i);
@@ -238,23 +240,23 @@ void SLRParser::yieldClosure(GrammarState *state) {
           auto[begin, end] = grammar_->prodRange(nextNonterm);
           for (size_t iProd = begin; iProd < end; ++iProd) {
             const auto& prod = grammar_->productions()[iProd];
-            state->addItem(item(&prod, 0));
+            state->addItem(item(prod.get(), 0));
           }
           added[iNextNonterm] = true;
         }
       }
     // }
   }
-  BOOST_LOG_TRIVIAL(debug) << "yield closure:\n" << *state;
+  // BOOST_LOG_TRIVIAL(debug) << "yield closure:\n" << *state;
 }
 
 void SLRParser::generateParseTable() {
-  auto startState = state(item(&grammar_->productions()[0], 0));
+  auto startState = state(item(grammar_->productions()[0].get(), 0));
   size_t nNonterms = grammar_->nonterminals().size();
   size_t nTerms = grammar_->terminals().size();
   size_t nSyms = nNonterms + nTerms;
   vector<vector<GrammarItem*>> gotoItems(nSyms);
-  unordered_map<GrammarItem*, size_t> itemToState;
+  vector<const Production*> prodOfTerm(nTerms, nullptr);
   // For each item i(`A ::= a . B b`) in each state, compute the goto
   // function GOTO(i, B) = item j(`A ::= a B. b`). Then group them
   // symbol by symbol, and add the yielded states if it is different from
@@ -262,6 +264,8 @@ void SLRParser::generateParseTable() {
   for (size_t iState = 0; iState < states_.size(); ++iState) {
     for (auto& items : gotoItems)
       items.clear();
+    for (auto& prod : prodOfTerm)
+      prod = nullptr;
     for (auto gItem : *states_[iState]) {
       auto lr0Item = dynamic_cast<LR0Item*>(gItem);
       if (Symbol *nextSym = lr0Item->nextSym()) {
@@ -271,23 +275,26 @@ void SLRParser::generateParseTable() {
           gotoItems[grammar_->indexOfNonterm(nextNonterm)].push_back(nextItem);
         } else {
           auto nextTerm = dynamic_cast<Terminal *>(nextSym);
-          gotoItems[grammar_->indexOfTerm(nextTerm) + nNonterms].push_back(
+          size_t iNextTerm = grammar_->indexOfTerm(nextTerm);
+          if (!prodOfTerm[iNextTerm])
+            prodOfTerm[iNextTerm] = nextItem->production();
+          gotoItems[iNextTerm + nNonterms].push_back(
               nextItem);
         }
       } else {
-        // When reaching the last item of a production, saying `A ::= a B .`,
-        // set its action to REDUCE by this production for all terminals
-        // in FOLLOW(A). If it is the starting production `S' ::= S .`, set
+        // When reaching the last item of a prod, saying `A ::= a B .`,
+        // set its action to REDUCE by this prod for all terminals
+        // in FOLLOW(A). If it is the starting prod `S' ::= S .`, set
         // its action to ACCEPT for the terminating terminal $.
-        auto iProd = static_cast<size_t>(
-            lr0Item->production() - grammar_->productions().data());
+        auto iProd = grammar_->indexOfProd(lr0Item->production());
         auto follows = grammar_->followsOf(lr0Item->production()->head());
         for (size_t iTerm = 0; iTerm < nTerms; ++iTerm) {
           if (follows[iTerm]) {
-            // TODO: process the conflicts.
-            parseTable_[iState][iTerm] = Action::REDUCE_(iProd);
-            if (iProd == 0 && iTerm == grammar_->indexOfToken(Token::EOF_TOK))
-              parseTable_[iState][iTerm] = Action::ACCEPT;
+            if (auto& action = parseTable_[iState][iTerm]; action.empty()) {
+              action = Action::REDUCE_(iProd);
+              if (iProd == 0 && iTerm == grammar_->indexOfToken(Token::EOF_TOK))
+                action = Action::ACCEPT;
+            }
           }
         }
       }
@@ -300,7 +307,20 @@ void SLRParser::generateParseTable() {
     // Set SHIFT actions of PARSE table for each grouped terminals.
     for (size_t iTerm = 0; iTerm < nTerms; ++iTerm)
       if (auto&& items = std::move(gotoItems[iTerm + nNonterms]); !items.empty()) {
-        parseTable_[iState][iTerm] = Action::SHIFT_(state(std::move(items)));
+        auto& action = parseTable_[iState][iTerm];
+        bool shift = false;
+        if (!action.empty() && action.isReduce()) {
+          const Production *lprod = grammar_->productions()[action.useProd].get();
+          const Production *rprod = prodOfTerm[iTerm];
+          if (auto comp = lprod->priorierThan(rprod); comp == Production::LOWER)
+            shift = true;
+          else if (comp == Production::ERROR) {
+            action = Action::ERROR;
+          }
+        } else
+          shift = true;
+        if (shift)
+          action = Action::SHIFT_(state(std::move(items)));
       }
   }
 }
@@ -326,18 +346,18 @@ unique_ptr<ParsedTerm> SLRParser::parse(lex::Lexer& lexer) {
       advance = true;
       stack.push({action.toState, std::make_unique<Terminal>(std::move(token))});
       break;
-    // For action REDUCE(p, I), pop |p| symbols, use production p to reduce
+    // For action REDUCE(p, I), pop |p| symbols, use prod p to reduce
     // them into a non-terminal, and push the reduced non-terminal A with a new
     // state checked from GOTO(A, I'), where I' is the state on the top of stack
     // before A has been pushed.
     case Action::REDUCE: {
-      const Production& prod = grammar_->productions()[action.useProd];
-      auto parsedTerm = std::make_unique<ParsedTerm>(prod.head()->name());
-      for (size_t i = 0; i < prod.size(); ++i) {
+      const Production *prod = grammar_->productions()[action.useProd].get();
+      auto parsedTerm = std::make_unique<ParsedTerm>(prod->head()->name());
+      for (size_t i = 0; i < prod->size(); ++i) {
         parsedTerm->addChildFront(std::move(stack.top().sym));
         stack.pop();
       }
-      size_t iNewState = gotoTable_[stack.top().iState][grammar_->indexOfNonterm(prod.head())];
+      size_t iNewState = gotoTable_[stack.top().iState][grammar_->indexOfNonterm(prod->head())];
       stack.push({iNewState, std::move(parsedTerm)});
       break;
     }
@@ -354,120 +374,118 @@ unique_ptr<ParsedTerm> SLRParser::parse(lex::Lexer& lexer) {
 }
 
 unique_ptr<const Grammar> Grammar::tigerGrammar() {
+  using ProdType = Production;
   Grammar::Builder g;
-  g.addProductions(
-          {
-              {g.nonterm("program"), {g.nonterm("exp"),},},
-              {g.nonterm("program"), {g.nonterm("decs"),},},
+  g.prod(g.nonterm("program"), {g.nonterm("exp"),})
+      .prod(g.nonterm("program"), {g.nonterm("decs"),})
+          // Literals.
+      .prod(g.nonterm("exp"), {g.term(Token::NIL)})
+      .prod(g.nonterm("exp"), {g.term(Token::INT)})
+      .prod(g.nonterm("exp"), {g.term(Token::STRING)})
+          // Array and record creations.
+      .prod(g.nonterm("exp"), {g.nonterm("type_id"), g.term(Token::LBRACK), g.nonterm("exp"), g.term(Token::RBRACK), g.term(Token::OF), g.nonterm("exp")})
+      .prod(g.nonterm("exp"), {g.nonterm("type_id"), g.term(Token::LBRACE), g.term(Token::RBRACE),})
+      .prod(g.nonterm("exp"), {g.nonterm("type_id"), g.term(Token::LBRACE), g.term(Token::ID), g.term(Token::EQ), g.nonterm("exp"), g.nonterm("closure1"), g.term(Token::RBRACE),})
+      .prod(g.nonterm("closure1"), {})
+      .prod(g.nonterm("closure1"), {g.nonterm("closure1"), g.term(Token::COMMA), g.term(Token::ID), g.term(Token::EQ), g.nonterm("exp"),})
+          // Object creation.
+      // .prod(g.nonterm("exp"), {g.term(Token::NEW), g.nonterm("type_id"),})
 
-              // Literals.
-              {g.nonterm("exp"), {g.term(Token::NIL)},},
-              {g.nonterm("exp"), {g.term(Token::INT)},},
-              {g.nonterm("exp"), {g.term(Token::STRING)},},
+          // Variables, field, elements of an array.
+      .prod(g.nonterm("exp"), {g.nonterm("lvalue"),})
 
-              // Array and record creations.
-              {g.nonterm("exp"), {g.nonterm("type_id"), g.term(Token::LBRACK), g.nonterm("exp"), g.term(Token::RBRACK), g.term(Token::OF), g.nonterm("exp")},},
-              {g.nonterm("exp"), {g.nonterm("type_id"), g.term(Token::LBRACE), g.term(Token::RBRACE),},},
-              {g.nonterm("exp"), {g.nonterm("type_id"), g.term(Token::LBRACE), g.term(Token::ID), g.term(Token::EQ), g.nonterm("exp"), g.nonterm("closure1"), g.term(Token::RBRACE),},},
-              {g.nonterm("closure1"), {},},
-              {g.nonterm("closure1"), {g.nonterm("closure1"), g.term(Token::COMMA), g.term(Token::ID), g.term(Token::EQ), g.nonterm("exp"),},},
+          // Function call
+      .prod(g.nonterm("exp"), {g.term(Token::ID), g.term(Token::LPAREN), g.term(Token::RPAREN),})
+      .prod(g.nonterm("exp"), {g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("exp"), g.nonterm("closure2"), g.term(Token::RPAREN),})
+      .prod(g.nonterm("closure2"), {})
+      .prod(g.nonterm("closure2"), {g.nonterm("closure2"), g.term(Token::COMMA), g.nonterm("exp"),})
 
-              // Object creation.
-              // {g.nonterm("exp"), {g.term(Token::NEW), g.nonterm("type_id"),},},
+          // Method call.
+      .prod(g.nonterm("exp"), {g.nonterm("lvalue"), g.term(Token::DOT), g.term(Token::ID), g.term(Token::LPAREN), g.term(Token::RPAREN),})
+      .prod(g.nonterm("exp"), {g.nonterm("lvalue"), g.term(Token::DOT), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("exp"), g.nonterm("closure2"), g.term(Token::RPAREN),})
 
-              // Variables, field, elements of an array.
-              {g.nonterm("exp"), {g.nonterm("lvalue"),},},
+          // Operations.
+      .prod(g.nonterm("exp"), {g.term(Token::MINUS), g.nonterm("exp"),}, {Production::RIGHT, Production::PROTECTED})
+      .prod(g.nonterm("exp"), {g.term(Token::LPAREN), g.nonterm("exps"), g.term(Token::RPAREN),})
 
-              // Function call
-              {g.nonterm("exp"), {g.term(Token::ID), g.term(Token::LPAREN), g.term(Token::RPAREN),},},
-              {g.nonterm("exp"), {g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("exp"), g.nonterm("closure2"), g.term(Token::RPAREN),},},
-              {g.nonterm("closure2"), {},},
-              {g.nonterm("closure2"), {g.nonterm("closure2"), g.term(Token::COMMA), g.nonterm("exp"),},},
+          // Assigns.
+      .prod(g.nonterm("exp"), {g.nonterm("lvalue"), g.term(Token::ASSIGN), g.nonterm("exp"),})
 
-              // Method call.
-              {g.nonterm("exp"), {g.nonterm("lvalue"), g.term(Token::DOT), g.term(Token::ID), g.term(Token::LPAREN), g.term(Token::RPAREN),},},
-              {g.nonterm("exp"), {g.nonterm("lvalue"), g.term(Token::DOT), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("exp"), g.nonterm("closure2"), g.term(Token::RPAREN),},},
+          // Control structures.
+      .prod(g.nonterm("exp"), {g.term(Token::IF), g.nonterm("exp"), g.term(Token::THEN), g.nonterm("exp"),})
+      .prod(g.nonterm("exp"), {g.term(Token::IF), g.nonterm("exp"), g.term(Token::THEN), g.nonterm("exp"), g.term(Token::ELSE), g.nonterm("exp"),})
+      .prod(g.nonterm("exp"), {g.term(Token::WHILE), g.nonterm("exp"), g.term(Token::DO), g.nonterm("exp"),})
+      .prod(g.nonterm("exp"), {g.term(Token::FOR), g.term(Token::ID), g.term(Token::ASSIGN), g.nonterm("exp"), g.term(Token::TO), g.nonterm("exp"), g.term(Token::DO), g.nonterm("exp"),})
+      .prod(g.nonterm("exp"), {g.term(Token::BREAK),})
+      .prod(g.nonterm("exp"), {g.term(Token::LET), g.nonterm("decs"), g.term(Token::IN), g.nonterm("exps"), g.term(Token::END),})
 
-              // Operations.
-              {g.nonterm("exp"), {g.term(Token::MINUS), g.nonterm("exp"),},},
-              {g.nonterm("exp"), {g.nonterm("exp"), g.nonterm("op"), g.nonterm("exp"),},},
-              {g.nonterm("exp"), {g.term(Token::LPAREN), g.nonterm("exps"), g.term(Token::RPAREN),},},
+      .prod(g.nonterm("lvalue"), {g.term(Token::ID),})
+      .prod(g.nonterm("lvalue"), {g.nonterm("lvalue"), g.term(Token::DOT), g.term(Token::ID),})
+      .prod(g.nonterm("lvalue"), {g.nonterm("lvalue"), g.term(Token::LBRACK), g.nonterm("exp"), g.term(Token::RBRACK),})
 
-              // Assigns.
-              {g.nonterm("exp"), {g.nonterm("lvalue"), g.term(Token::ASSIGN), g.nonterm("exp"),},},
+      .prod(g.nonterm("exps"), {})
+      .prod(g.nonterm("exps"), {g.nonterm("exp"), g.nonterm("closure3"),})
+      .prod(g.nonterm("closure3"), {g.nonterm("closure3"), g.term(Token::SEMICOLON), g.nonterm("exp"),})
 
-              // Control structures.
-              {g.nonterm("exp"), {g.term(Token::IF), g.nonterm("exp"), g.term(Token::THEN), g.nonterm("exp"),},},
-              {g.nonterm("exp"), {g.term(Token::IF), g.nonterm("exp"), g.term(Token::THEN), g.nonterm("exp"), g.term(Token::ELSE), g.nonterm("exp"),},},
-              {g.nonterm("exp"), {g.term(Token::WHILE), g.nonterm("exp"), g.term(Token::DO), g.nonterm("exp"),},},
-              {g.nonterm("exp"), {g.term(Token::FOR), g.term(Token::ID), g.term(Token::ASSIGN), g.nonterm("exp"), g.term(Token::TO), g.nonterm("exp"), g.term(Token::DO), g.nonterm("exp"),},},
-              {g.nonterm("exp"), {g.term(Token::BREAK),},},
-              {g.nonterm("exp"), {g.term(Token::LET), g.nonterm("decs"), g.term(Token::IN), g.nonterm("exps"), g.term(Token::END),},},
+      .prod(g.nonterm("decs"), {})
+      .prod(g.nonterm("decs"), {g.nonterm("decs"), g.nonterm("dec"),})
 
-              {g.nonterm("lvalue"), {g.term(Token::ID),},},
-              {g.nonterm("lvalue"), {g.nonterm("lvalue"), g.term(Token::DOT), g.term(Token::ID),},},
-              {g.nonterm("lvalue"), {g.nonterm("lvalue"), g.term(Token::LBRACK), g.nonterm("exp"), g.term(Token::RBRACK),},},
+          // Type declaration.
+      .prod(g.nonterm("dec"), {g.term(Token::TYPE), g.term(Token::ID), g.term(Token::EQ), g.nonterm("ty"),})
+          // Class definition.
+      // .prod(g.nonterm("dec"), {g.term(Token::CLASS), g.term(Token::ID), g.term(Token::LBRACE), g.nonterm("classfields"), g.term(Token::RBRACE),})
+      // .prod(g.nonterm("dec"), {g.term(Token::CLASS), g.term(Token::ID), g.term(Token::EXTENDS),  g.nonterm("type_id"), g.term(Token::LBRACE), g.nonterm("classfields"), g.term(Token::RBRACE),})
+          // Variable declaration.
+      .prod(g.nonterm("dec"), {g.nonterm("vardec"),})
+          // Function declaration.
+      .prod(g.nonterm("dec"), {g.term(Token::FUNCTION), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::EQ), g.nonterm("exp"),})
+      .prod(g.nonterm("dec"), {g.term(Token::FUNCTION), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::COLON), g.nonterm("type_id"), g.term(Token::EQ), g.nonterm("exp"),})
+          // Primitive declaration.
+      // .prod(g.nonterm("dec"), {g.term(Token::PRIMITIVE), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN),})
+      // .prod(g.nonterm("dec"), {g.term(Token::PRIMITIVE), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::COLON), g.nonterm("type_id"),})
+          // Import a set of declaration.
+      // .prod(g.nonterm("dec"), {g.term(Token::IMPORT), g.term(Token::STRING),})
 
-              {g.nonterm("exps"), {},},
-              {g.nonterm("exps"), {g.nonterm("exp"), g.nonterm("closure3"),},},
-              {g.nonterm("closure3"), {g.nonterm("closure3"), g.term(Token::SEMICOLON), g.nonterm("exp"),},},
+      .prod(g.nonterm("vardec"), {g.term(Token::VAR), g.term(Token::ID), g.term(Token::ASSIGN), g.nonterm("exp"),})
+      .prod(g.nonterm("vardec"), {g.term(Token::VAR), g.term(Token::ID), g.term(Token::COLON), g.nonterm("type_id"), g.term(Token::ASSIGN), g.nonterm("exp"),})
 
-              {g.nonterm("decs"), {},},
-              {g.nonterm("decs"), {g.nonterm("decs"), g.nonterm("dec"),},},
+      // .prod(g.nonterm("classfields"), {})
+      // .prod(g.nonterm("classfields"), {g.nonterm("classfields"), g.nonterm("classfield"),})
+          // Class fields.
+      // .prod(g.nonterm("classfield"), {g.nonterm("vardec"),})
+      // .prod(g.nonterm("classfield"), {g.term(Token::METHOD), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::EQ), g.nonterm("exp"),})
+      // .prod(g.nonterm("classfield"), {g.term(Token::METHOD), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::COLON), g.nonterm("type_id"), g.term(Token::EQ), g.nonterm("exp"),})
 
-              // Type declaration.
-              {g.nonterm("dec"), {g.term(Token::TYPE), g.term(Token::ID), g.term(Token::EQ), g.nonterm("ty"),},},
-              // Class definition.
-              // {g.nonterm("dec"), {g.term(Token::CLASS), g.term(Token::ID), g.term(Token::LBRACE), g.nonterm("classfields"), g.term(Token::RBRACE),},},
-              // {g.nonterm("dec"), {g.term(Token::CLASS), g.term(Token::ID), g.term(Token::EXTENDS),  g.nonterm("type_id"), g.term(Token::LBRACE), g.nonterm("classfields"), g.term(Token::RBRACE),},},
-              // Variable declaration.
-              {g.nonterm("dec"), {g.nonterm("vardec"),},},
-              // Function declaration.
-              {g.nonterm("dec"), {g.term(Token::FUNCTION), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::EQ), g.nonterm("exp"),},},
-              {g.nonterm("dec"), {g.term(Token::FUNCTION), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::COLON), g.nonterm("type_id"), g.term(Token::EQ), g.nonterm("exp"),},},
-              // Primitive declaration.
-              // {g.nonterm("dec"), {g.term(Token::PRIMITIVE), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN),},},
-              // {g.nonterm("dec"), {g.term(Token::PRIMITIVE), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::COLON), g.nonterm("type_id"),},},
-              // Import a set of declaration.
-              // {g.nonterm("dec"), {g.term(Token::IMPORT), g.term(Token::STRING),},},
+          // Types.
+      .prod(g.nonterm("ty"), {g.nonterm("type_id"),})
+      .prod(g.nonterm("ty"), {g.term(Token::LBRACE), g.nonterm("tyfields"), g.term(Token::RBRACE),})
+      .prod(g.nonterm("ty"), {g.term(Token::ARRAY), g.term(Token::OF), g.nonterm("type_id"),})
+      // .prod(g.nonterm("ty"), {g.term(Token::CLASS), g.term(Token::LBRACE), g.nonterm("classfields"), g.term(Token::RBRACE),})
+      // .prod(g.nonterm("ty"), {g.term(Token::CLASS), g.term(Token::EXTENDS),  g.nonterm("type_id"), g.term(Token::LBRACE), g.nonterm("classfields"), g.term(Token::RBRACE),})
 
-              {g.nonterm("vardec"), {g.term(Token::VAR), g.term(Token::ID), g.term(Token::ASSIGN), g.nonterm("exp"),},},
-              {g.nonterm("vardec"), {g.term(Token::VAR), g.term(Token::ID), g.term(Token::COLON), g.nonterm("type_id"), g.term(Token::ASSIGN), g.nonterm("exp"),},},
+      .prod(g.nonterm("tyfields"), {})
+      .prod(g.nonterm("tyfields"), {g.term(Token::ID), g.term(Token::COLON), g.nonterm("type_id"), g.nonterm("closure4"),})
+      .prod(g.nonterm("closure4"), {})
+      .prod(g.nonterm("closure4"), {g.nonterm("closure4"), g.term(Token::COMMA), g.term(Token::ID), g.term(Token::COLON), g.nonterm("type_id"),})
 
-              // {g.nonterm("classfields"), {},},
-              // {g.nonterm("classfields"), {g.nonterm("classfields"), g.nonterm("classfield"),},},
-              // Class fields.
-              // {g.nonterm("classfield"), {g.nonterm("vardec"),},},
-              // {g.nonterm("classfield"), {g.term(Token::METHOD), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::EQ), g.nonterm("exp"),},},
-              // {g.nonterm("classfield"), {g.term(Token::METHOD), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::COLON), g.nonterm("type_id"), g.term(Token::EQ), g.nonterm("exp"),},},
+      .prod(g.nonterm("type_id"), {g.term(Token::ID),})
 
-              // Types.
-              {g.nonterm("ty"), {g.nonterm("type_id"),},},
-              {g.nonterm("ty"), {g.term(Token::LBRACE), g.nonterm("tyfields"), g.term(Token::RBRACE),},},
-              {g.nonterm("ty"), {g.term(Token::ARRAY), g.term(Token::OF), g.nonterm("type_id"),},},
-              // {g.nonterm("ty"), {g.term(Token::CLASS), g.term(Token::LBRACE), g.nonterm("classfields"), g.term(Token::RBRACE),},},
-              // {g.nonterm("ty"), {g.term(Token::CLASS), g.term(Token::EXTENDS),  g.nonterm("type_id"), g.term(Token::LBRACE), g.nonterm("classfields"), g.term(Token::RBRACE),},},
+          // Operators.
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::TIMES), g.nonterm("exp")}, {Production::LEFT, Production::FIRST})
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::DIVIDE), g.nonterm("exp")}, {Production::LEFT, Production::FIRST})
 
-              {g.nonterm("tyfields"), {},},
-              {g.nonterm("tyfields"), {g.term(Token::ID), g.term(Token::COLON), g.nonterm("type_id"), g.nonterm("closure4"),},},
-              {g.nonterm("closure4"), {},},
-              {g.nonterm("closure4"), {g.nonterm("closure4"), g.term(Token::COMMA), g.term(Token::ID), g.term(Token::COLON), g.nonterm("type_id"),},},
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::PLUS), g.nonterm("exp")}, {Production::LEFT, Production::SECOND})
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::MINUS), g.nonterm("exp")}, {Production::LEFT, Production::SECOND})
 
-              {g.nonterm("type_id"), {g.term(Token::ID),},},
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::EQ), g.nonterm("exp")}, {Production::NONE, Production::THIRD})
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::NEQ), g.nonterm("exp")}, {Production::NONE, Production::THIRD})
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::GT), g.nonterm("exp")}, {Production::NONE, Production::THIRD})
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::LT), g.nonterm("exp")}, {Production::NONE, Production::THIRD})
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::GE), g.nonterm("exp")}, {Production::NONE, Production::THIRD})
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::LE), g.nonterm("exp")}, {Production::NONE, Production::THIRD})
 
-              {g.nonterm("op"), {g.term(Token::PLUS),},},
-              {g.nonterm("op"), {g.term(Token::MINUS),},},
-              {g.nonterm("op"), {g.term(Token::TIMES),},},
-              {g.nonterm("op"), {g.term(Token::DIVIDE),},},
-              {g.nonterm("op"), {g.term(Token::EQ),},},
-              {g.nonterm("op"), {g.term(Token::NEQ),},},
-              {g.nonterm("op"), {g.term(Token::GT),},},
-              {g.nonterm("op"), {g.term(Token::LT),},},
-              {g.nonterm("op"), {g.term(Token::GE),},},
-              {g.nonterm("op"), {g.term(Token::LE),},},
-              {g.nonterm("op"), {g.term(Token::AND),},},
-              {g.nonterm("op"), {g.term(Token::OR),},},
-          })
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::AND), g.nonterm("exp")}, {Production::LEFT, Production::FOURTH})
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::OR), g.nonterm("exp")}, {Production::LEFT, Production::FOURTH})
       .startAt(g.nonterm("program"));
 
   return std::make_unique<const Grammar>(g.build());

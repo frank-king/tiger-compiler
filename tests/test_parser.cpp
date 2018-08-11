@@ -10,35 +10,44 @@ TEST(parser_test, test_ambiguious_grammar) {
   using namespace tiger::lex;
   using namespace tiger::syntax;
   Grammar::Builder g;
-  g.addProductions(
-          {
-              {g.nonterm("E"), {g.nonterm("E"), g.term(Token::TIMES), g.nonterm("E"),},},
-              {g.nonterm("E"), {g.nonterm("E"), g.term(Token::PLUS), g.nonterm("E"),},},
-              {g.nonterm("E"), {g.term(Token::LPAREN), g.nonterm("E"), g.term(Token::RPAREN),},},
-              {g.nonterm("E"), {g.term(Token::ID),},},
-          })
+  g.prod(g.nonterm("E"), {g.nonterm("E"), g.term(Token::TIMES), g.nonterm("E"),}, {Production::LEFT, Production::FIRST})
+      .prod(g.nonterm("E"), {g.nonterm("E"), g.term(Token::PLUS), g.nonterm("E"),}, {Production::LEFT, Production::SECOND})
+      .prod(g.nonterm("E"), {g.term(Token::LPAREN), g.nonterm("E"), g.term(Token::RPAREN),})
+      .prod(g.nonterm("E"), {g.term(Token::ID),})
       .startAt(g.nonterm("E"));
 
   unique_ptr<const Grammar> grammar(new Grammar(g.build()));
 
-  string program("a * b + c");
+  string program("(a * b + c * d) * e");
   Lexer lexer(program);
   auto parser = SLRParser::newInstance(std::move(grammar));
 
   auto parseTree = parser->parse(lexer);
   auto expectedParseTree = std::make_unique<ParsedTerm>("E", deque<Symbol*>{
       new ParsedTerm("E", deque<Symbol*>{
-          new ParsedTerm("E", deque<Symbol*>{
-              new Terminal(Token::ID_("a")),
+          new ParsedTerm("E", deque<Symbol *>{
+              new ParsedTerm("E", deque<Symbol *>{
+                  new Terminal(Token::ID_("a")),
+              }),
+              new Terminal(Token::TIMES),
+              new ParsedTerm("E", deque<Symbol *>{
+                  new Terminal(Token::ID_("b")),
+              }),
           }),
-          new Terminal(Token::TIMES),
-          new ParsedTerm("E", deque<Symbol*>{
-              new Terminal(Token::ID_("b")),
+          new Terminal(Token::PLUS),
+          new ParsedTerm("E", deque<Symbol *>{
+              new ParsedTerm("E", deque<Symbol *>{
+                  new Terminal(Token::ID_("c")),
+              }),
+              new Terminal(Token::TIMES),
+              new ParsedTerm("E", deque<Symbol *>{
+                  new Terminal(Token::ID_("d")),
+              }),
           }),
       }),
-      new Terminal(Token::PLUS),
-      new ParsedTerm("E", deque<Symbol*>{
-          new Terminal(Token::ID_("c")),
+      new Terminal(Token::TIMES),
+      new ParsedTerm("E", deque<Symbol *>{
+          new Terminal(Token::ID_("e")),
       }),
   });
 
@@ -50,15 +59,12 @@ TEST(parser_test, test_simple_grammar) {
   using namespace tiger::syntax;
 
   Grammar::Builder g;
-  g.addProductions(
-          {
-              {g.nonterm("E"), {g.nonterm("E"), g.term(Token::PLUS), g.nonterm("T"),},},
-              {g.nonterm("E"), {g.nonterm("T"),},},
-              {g.nonterm("T"), {g.nonterm("T"), g.term(Token::TIMES), g.nonterm("F"),},},
-              {g.nonterm("T"), {g.nonterm("F"),},},
-              {g.nonterm("F"), {g.term(Token::LPAREN), g.nonterm("E"), g.term(Token::RPAREN),},},
-              {g.nonterm("F"), {g.term(Token::ID),},},
-          })
+  g.prod(g.nonterm("E"), {g.nonterm("E"), g.term(Token::PLUS), g.nonterm("T"),})
+      .prod(g.nonterm("E"), {g.nonterm("T"),})
+      .prod(g.nonterm("T"), {g.nonterm("T"), g.term(Token::TIMES), g.nonterm("F"),})
+      .prod(g.nonterm("T"), {g.nonterm("F"),})
+      .prod(g.nonterm("F"), {g.term(Token::LPAREN), g.nonterm("E"), g.term(Token::RPAREN),})
+      .prod(g.nonterm("F"), {g.term(Token::ID),})
       .startAt(g.nonterm("E"));
 
   unique_ptr<const Grammar> grammar(new Grammar(g.build()));
@@ -77,15 +83,14 @@ TEST(parser_test, test_simple_grammar) {
   terms.emplace_back(new Terminal(Token::ID));
   terms.emplace_back(new Terminal(Token::EOF_TOK));
 
-  vector<Production> productions{
-      {g.nonterm(" aug"), {g.nonterm("E"),},},
-      {g.nonterm("E"), {g.nonterm("E"), g.term(Token::PLUS), g.nonterm("T"),},},
-      {g.nonterm("E"), {g.nonterm("T"),},},
-      {g.nonterm("F"), {g.term(Token::LPAREN), g.nonterm("E"), g.term(Token::RPAREN),},},
-      {g.nonterm("F"), {g.term(Token::ID),},},
-      {g.nonterm("T"), {g.nonterm("T"), g.term(Token::TIMES), g.nonterm("F"),},},
-      {g.nonterm("T"), {g.nonterm("F"),},},
-  };
+  vector<unique_ptr<Production>> productions;
+  productions.emplace_back(new Production(g.nonterm(" aug"), {g.nonterm("E"),}));
+  productions.emplace_back(new Production(g.nonterm("E"), {g.nonterm("E"), g.term(Token::PLUS), g.nonterm("T"),}));
+  productions.emplace_back(new Production(g.nonterm("E"), {g.nonterm("T"),}));
+  productions.emplace_back(new Production(g.nonterm("F"), {g.term(Token::LPAREN), g.nonterm("E"), g.term(Token::RPAREN),}));
+  productions.emplace_back(new Production(g.nonterm("F"), {g.term(Token::ID),}));
+  productions.emplace_back(new Production(g.nonterm("T"), {g.nonterm("T"), g.term(Token::TIMES), g.nonterm("F"),}));
+  productions.emplace_back(new Production(g.nonterm("T"), {g.nonterm("F"),}));
 
   EXPECT_EQ(grammar->terminals().size(), terms.size());
   for (auto it1 = grammar->terminals().cbegin(), it2 = terms.cbegin();
@@ -103,7 +108,7 @@ TEST(parser_test, test_simple_grammar) {
   for (auto it1 = grammar->productions().cbegin(), it2 = productions.cbegin();
        it1 != grammar->productions().cend() && it2 != productions.cend();
        ++it1, ++it2) {
-    EXPECT_EQ(*it1, *it2);
+    EXPECT_EQ(**it1, **it2);
   }
 
   vector<vector<bool>> firstsOf(nonterms.size());
@@ -164,14 +169,14 @@ TEST(parser_test, test_grammar) {
   vector<unique_ptr<Terminal>> terms;
   vector<unique_ptr<NonTerminal>> nonterms;
 
-  nonterms.emplace_back(new NonTerminal("program"));
   nonterms.emplace_back(new NonTerminal("exp"));
+  nonterms.emplace_back(new NonTerminal("program"));
   nonterms.emplace_back(new NonTerminal("decs"));
   nonterms.emplace_back(new NonTerminal("type_id"));
   nonterms.emplace_back(new NonTerminal("closure1"));
   nonterms.emplace_back(new NonTerminal("lvalue"));
   nonterms.emplace_back(new NonTerminal("closure2"));
-  nonterms.emplace_back(new NonTerminal("op"));
+  // nonterms.emplace_back(new NonTerminal("opexp"));
   nonterms.emplace_back(new NonTerminal("exps"));
   nonterms.emplace_back(new NonTerminal("closure3"));
   nonterms.emplace_back(new NonTerminal("dec"));
@@ -222,9 +227,9 @@ TEST(parser_test, test_grammar) {
   terms.emplace_back(new Terminal(Token::VAR));
   // terms.emplace_back(new Terminal(Token::METHOD));
   terms.emplace_back(new Terminal(Token::ARRAY));
-  terms.emplace_back(new Terminal(Token::PLUS));
   terms.emplace_back(new Terminal(Token::TIMES));
   terms.emplace_back(new Terminal(Token::DIVIDE));
+  terms.emplace_back(new Terminal(Token::PLUS));
   terms.emplace_back(new Terminal(Token::NEQ));
   terms.emplace_back(new Terminal(Token::GT));
   terms.emplace_back(new Terminal(Token::LT));

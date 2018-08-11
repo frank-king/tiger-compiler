@@ -84,20 +84,6 @@ protected:
 
 class ParsedTerm : public NonTerminal {
 public:
-  bool operator==(const ParsedTerm& rhs) const {
-    if (name() != rhs.name())
-      return false;
-    if (children_.size() != rhs.children_.size())
-      return false;
-    for (auto it = children_.cbegin(), itr = rhs.children_.cbegin();
-         it != children_.cend() && itr != rhs.children_.cend(); ++it, ++itr)
-      if (**it != **itr)
-        return false;
-    return true;
-  }
-  bool operator!=(const ParsedTerm& rhs) const {
-    return !(rhs == *this);
-  }
   explicit ParsedTerm(string name) : NonTerminal(std::move(name)) {}
   explicit ParsedTerm(const char_t *name) : NonTerminal(name) {}
   explicit ParsedTerm(ParsedTerm&& other) = default;
@@ -120,6 +106,20 @@ public:
     term.print(os);
     return os;
   }
+  bool operator==(const ParsedTerm& rhs) const {
+    if (name() != rhs.name())
+      return false;
+    if (children_.size() != rhs.children_.size())
+      return false;
+    for (auto it = children_.cbegin(), itr = rhs.children_.cbegin();
+         it != children_.cend() && itr != rhs.children_.cend(); ++it, ++itr)
+      if (**it != **itr)
+        return false;
+    return true;
+  }
+  bool operator!=(const ParsedTerm& rhs) const {
+    return !(rhs == *this);
+  }
 
 protected:
   void print(std::ostream& os) const override {
@@ -136,8 +136,27 @@ protected:
 
 class Production {
 public:
+  enum Associative : int8_t { NONE = -1, LEFT, RIGHT };
+  enum PriorityClass : uint8_t {
+    UNDEF = 0x7f,
+    PROTECTED = 0,
+    FIRST, SECOND, THIRD, FOURTH, FIFTH, SIXTH, SEVENTH, EIGHTH, NINTH, TENTH,
+  };
+  enum PriorityComp { ERROR = -1, HIGHER, LOWER, };
+
+  struct Attribute {
+    Associative assoc;
+    PriorityClass prior;
+
+    constexpr Attribute() noexcept : assoc(RIGHT), prior(UNDEF) {}
+    constexpr Attribute(Associative assoc, PriorityClass prior) noexcept
+        : assoc(assoc), prior(prior) {}
+  };
+
   Production(NonTerminal *head, vector<Symbol*>&& body)
       : head_(head), body_(std::move(body)) {}
+  Production(NonTerminal *head, vector<Symbol*>&& body, Attribute attr)
+      : head_(head), body_(std::move(body)), attr_(attr) {}
   Production(const Production& other) = default;
   Production(Production&& other) noexcept = default;
   Production& operator=(const Production& other) = default;
@@ -168,17 +187,37 @@ public:
   bool operator!=(const Production& rhs) const {
     return !(rhs == *this);
   }
+
+  PriorityComp priorierThan(const Production *rhs) const {
+    if (prior() == UNDEF || rhs->prior() == UNDEF ||
+        assoc() == NONE || rhs->assoc() == NONE)
+      return ERROR;
+    else if (prior() < rhs->prior())
+      return HIGHER;
+    else if (prior() > rhs->prior())
+      return LOWER;
+    else if (assoc() == LEFT)
+      return HIGHER;
+    else if (assoc() == RIGHT)
+      return LOWER;
+    else
+      return ERROR;
+  }
   constexpr const auto& body() const noexcept { return body_; }
 protected:
+  constexpr Associative assoc() const noexcept { return attr_.assoc; }
+  constexpr PriorityClass prior() const noexcept { return attr_.prior; }
+
   NonTerminal *head_;
   vector<Symbol*> body_;
+  Attribute attr_;
 };
 
 class Grammar {
 public:
   explicit Grammar(vector<unique_ptr<Terminal>>&& terms,
                    vector<unique_ptr<NonTerminal>>&& nonterms,
-                   vector<Production>&& prods,
+                   vector<unique_ptr<Production>>&& prods,
                    unordered_map<Token::Type, Terminal*> termTypeHash,
                    NonTerminal *aug, Terminal *eof) noexcept;
   explicit Grammar(Grammar&& other) = default;
@@ -192,6 +231,9 @@ public:
   size_t indexOfToken(Token::Type type) const noexcept { return termTypeHash_.at(type); }
   size_t indexOfNonterm(NonTerminal *nonterm) const noexcept {
     return nontermHash_.at(nonterm);
+  }
+  size_t indexOfProd(const Production *production) const noexcept {
+    return prodHash_.at(production);
   }
   auto prodRange(NonTerminal *nonterm) const noexcept {
     return prodRanges_[indexOfNonterm(nonterm)];
@@ -209,12 +251,24 @@ public:
   public:
     Terminal *term(const Token& token);
     NonTerminal *nonterm(string name);
-    Builder& addProductions(std::vector<Production>&& prods) {
-      prods_.insert(prods_.cend(), prods.begin(), prods.end());
+    Builder& prod(NonTerminal *nonterm, vector<Symbol*>&& syms) {
+      prods_.emplace_back(std::make_unique<Production>(nonterm, std::move(syms)));
       return *this;
     }
+    Builder& prod(NonTerminal *nonterm, vector<Symbol*>&& syms, Production::Attribute attr) {
+      prods_.emplace_back(std::make_unique<Production>(nonterm, std::move(syms), attr));
+      return *this;
+    }
+    /*
+    Builder& addProductions(std::vector<Production>&& prods) {
+      for (auto&& prod : std::move(prods)) {
+        prods_.emplace_back(new Production(std::move(prod)));
+      }
+      return *this;
+    }
+    */
     Builder& startAt(NonTerminal *start) noexcept {
-      prods_.push_back(Production(aug_ = nonterm(" aug"), {start,}));
+      prods_.emplace_back(new Production(aug_ = nonterm(" aug"), {start,}));
       return *this;
     }
     Grammar build() noexcept;
@@ -222,7 +276,7 @@ public:
   protected:
     vector<unique_ptr<Terminal>> terms_;
     vector<unique_ptr<NonTerminal>> nonterms_;
-    vector<Production> prods_;
+    vector<unique_ptr<Production>> prods_;
     unordered_map<string, NonTerminal*> nontermHash_;
     unordered_map<Token::Type, Terminal*> termHash_;
     NonTerminal *aug_ = nullptr;
@@ -236,9 +290,10 @@ protected:
 
   vector<unique_ptr<Terminal>> terms_;
   vector<unique_ptr<NonTerminal>> nonterms_;
-  vector<Production> prods_;
+  vector<unique_ptr<Production>> prods_;
   unordered_map<Terminal*, size_t> termHash_;
   unordered_map<NonTerminal*, size_t> nontermHash_;
+  unordered_map<const Production*, size_t> prodHash_;
   vector<std::pair<size_t, size_t>> prodRanges_;
   unordered_map<Token::Type, size_t> termTypeHash_;
   vector<vector<bool>> firsts_;
@@ -315,11 +370,14 @@ protected:
 };
 
 struct Action {
-  enum Type { SHIFT, REDUCE, ACCEPT, ERROR = -1 } type;
+  enum Type { SHIFT, REDUCE, ACCEPT, ERROR = -1, UNDEF = -2, } type;
   union { size_t toState; size_t useProd; size_t param; };
 
-  constexpr Action() noexcept : type(ERROR), param() {}
+  constexpr Action() noexcept : type(UNDEF), param() {}
   constexpr Action(Type type, size_t param = 0) noexcept : type(type), param(param) {}
+  constexpr bool empty() const noexcept { return type == UNDEF; }
+  constexpr bool isReduce() const noexcept { return type == REDUCE; }
+  constexpr bool isShift() const noexcept { return type == SHIFT; }
 
   static constexpr Action SHIFT_(size_t toState) noexcept {
     return Action{SHIFT, toState};
