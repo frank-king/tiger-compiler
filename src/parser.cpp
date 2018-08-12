@@ -6,6 +6,7 @@
 #include <functional>
 #include <stack>
 #include <boost/log/trivial.hpp>
+#include <iostream>
 #include "parser.h"
 
 namespace tiger::syntax {
@@ -47,65 +48,77 @@ Grammar::Grammar(vector<unique_ptr<Terminal>>&& terms,
 }
 
 void Grammar::computeFirsts() {
-  const auto& EMPTY_TERM = terms_.size();
+  // const auto& EMPTY_TERM = terms_.size();
   firsts_.resize(nonterms_.size());
   for (size_t iNonterm = 0; iNonterm < nonterms_.size(); ++iNonterm) {
-    firsts_[iNonterm].resize(terms_.size() + 1, false);
+    firsts_[iNonterm].resize(terms_.size()/* + 1*/, false);
   }
   vector<bool> computed(nonterms_.size(), false);
 
   // Recursively compute the first sets.
-  std::function<void(size_t iProd)> compute = [&](size_t iNonterm) {
-    // size_t iNonterm = nontermHash_[prod.head()];
-    computed[iNonterm] = true;
-    auto [begin, end] = prodRanges_[iNonterm];
-    for (size_t iProd = begin; iProd < end; ++iProd) {
-      const auto& prod = prods_[iProd];
-      // If X -> EMPTY, then add EMPTY to FIRST(X).
-      if (prod->body().empty()) {
-        firsts_[iNonterm][EMPTY_TERM] = true;
+  std::function<void(size_t iProd)> compute =
+      [&computed, &compute, this](size_t iNonterm) {
+        // size_t iNonterm = nontermHash_[prod.head()];
         computed[iNonterm] = true;
-        return;
-      }
-      bool emptyBefore = true;
-      // For X ::= X1 X2 X3 ... Xn, if EMPTY is in X[1], X[2], ..., X[i],
-      // then recursively compute and add all of the first sets of
-      // X[1], X[2], ..., X[i-1] to X.
-      for (const auto& item : prod->body()) {
-        if (item->isTerminal()) {
-          auto term = dynamic_cast<Terminal *>(item);
-          firsts_[iNonterm][termHash_[term]] = true;
-        } else {
-          auto nextNonterm = dynamic_cast<NonTerminal *>(item);
-          size_t iNextNonterm = nontermHash_[nextNonterm];
-          if (iNextNonterm != iNonterm) {
-            if (!computed[iNextNonterm])
-              compute(iNextNonterm);
-            for (size_t iTerm = 0; iTerm < firsts_[iNextNonterm].size();
-                 ++iTerm)
-              if (firsts_[iNextNonterm][iTerm])
-                firsts_[iNonterm][iTerm] = true;
+        auto [begin, end] = prodRanges_[iNonterm];
+        for (size_t iProd = begin; iProd < end; ++iProd) {
+          const auto& prod = prods_[iProd];
+          // If X -> EMPTY, then add EMPTY to FIRST(X).
+          if (prod->body().empty()) {
+            nonterms_[iNonterm]->nullable(true);
+            // firsts_[iNonterm][EMPTY_TERM] = true;
+            continue;
           }
-          if (!firsts_[nontermHash_[nextNonterm]][EMPTY_TERM]) {
-            break;
+          bool emptyBefore = true;
+          // For X ::= X1 X2 X3 ... Xn, if EMPTY is in X[1], X[2], ..., X[i],
+          // then recursively compute and add all of the first sets of
+          // X[1], X[2], ..., X[i-1] to X.
+          for (const auto& item : prod->body()) {
+            if (item->isTerminal()) {
+              auto term = dynamic_cast<Terminal *>(item);
+              firsts_[iNonterm][termHash_[term]] = true;
+              break;
+            } else {
+              auto nextNonterm = dynamic_cast<NonTerminal *>(item);
+              size_t iNextNonterm = nontermHash_[nextNonterm];
+              if (iNextNonterm != iNonterm) {
+                if (!computed[iNextNonterm])
+                  compute(iNextNonterm);
+                firsts_[iNonterm] |= firsts_[iNextNonterm];
+                /*
+                for (size_t iTerm = 0; iTerm < firsts_[iNextNonterm].size();
+                     ++iTerm)
+                  if (firsts_[iNextNonterm][iTerm])
+                    firsts_[iNonterm][iTerm] = true;
+                 */
+              }
+              // if (!firsts_[nontermHash_[nextNonterm]][EMPTY_TERM])
+              if (!nextNonterm->nullable())
+                break;
+            }
           }
         }
-      }
-    }
-  };
+      };
 
   // Compute first sets for each non-terminals.
   for (size_t i = 0; i < nonterms_.size(); ++i)
     if (!computed[i])
       compute(i);
+#ifndef NDEBUG
+  for (size_t i = 0; i < nonterms_.size(); ++i) {
+    std::clog << "first(" << *nonterms_[i] << ") = {";
+    for (size_t j = 0; j < terms_.size(); ++j)
+      if (firsts_[i][j])
+        std::clog << *terms_[j] << ", ";
+    std::clog << "}" << std::endl;
+  }
+  std::clog << std::endl;
+#endif
 }
 
 void Grammar::computeFollows() {
-  const auto& EMPTY_TERM = terms_.size();
-  follows_.resize(nonterms_.size());
-  for (size_t iNonterm = 0; iNonterm < nonterms_.size(); ++iNonterm) {
-    follows_[iNonterm].resize(terms_.size(), false);
-  }
+  // const auto& EMPTY_TERM = terms_.size();
+  follows_.resize(nonterms_.size(), valarray<bool>(false, terms_.size()));
 
   follows_[nontermHash_[aug_]][termHash_[eof_]] = true;
   // If there is A ::= a B b, then everything in
@@ -121,19 +134,59 @@ void Grammar::computeFollows() {
             follows_[iNonterm][iNextTerm] = true;
           } else {
             size_t iNextNonterm = nontermHash_[dynamic_cast<NonTerminal*>(nextItem)];
+            follows_[iNonterm] |= firsts_[iNextNonterm];
+            /*
             // Except the EMPTY terminal.
             for (size_t iTerm = 0; iTerm < terms_.size(); ++iTerm) {
-              if (firsts_[iNonterm][iTerm])
+              if (firsts_[iNextNonterm][iTerm])
                 follows_[iNonterm][iTerm] = true;
             }
+            */
           }
         }
       }
     }
   }
 
+  // Find all of the dependencies where B depends on A
+  // within such production A ::= a B.
+  vector<vector<bool>> belongingTails(nonterms_.size(),
+                                      vector<bool>(nonterms_.size(), false));
+  for (auto& prod : prods_) {
+    const auto& prodBody = prod->body();
+    for (auto i = prodBody.rbegin(); i < prodBody.rend(); ++i) {
+      auto sym = *i;
+      if (sym->isTerminal())
+        break;
+
+      size_t iHeadNonterm = nontermHash_[prod->head()];
+      size_t iNonterm = nontermHash_[dynamic_cast<NonTerminal*>(sym)];
+      belongingTails[iNonterm][iHeadNonterm] = true;
+      if (!nonterms_[iNonterm]->nullable())
+        break;
+    }
+  }
+
+  // Recursively compute the dependent following sets.
+  vector<bool> computed(nonterms_.size(), false);
+  std::function<void(size_t iProd)> compute =
+      [&computed, &compute, &belongingTails, this](size_t iNonterm) {
+        computed[iNonterm] = true;
+        for (size_t iHeadNonterm = 0; iHeadNonterm < nonterms_.size(); ++iHeadNonterm) {
+          if (belongingTails[iNonterm][iHeadNonterm]) {
+            if (!computed[iHeadNonterm])
+              compute(iHeadNonterm);
+            follows_[iNonterm] |= follows_[iHeadNonterm];
+          }
+        }
+      };
+
   // If there is A ::= a B, or A ::= a B b, and EMPTY is in FIRST(b),
   // then everything in FOLLOW(A) is in FOLLOW(B).
+  for (size_t i = 0; i < nonterms_.size(); ++i)
+    if (!computed[i])
+      compute(i);
+  /*
   for (auto& prod : prods_) {
     const auto& prodBody = prod->body();
     for (auto i = prodBody.rbegin(); i < prodBody.rend(); ++i) {
@@ -143,14 +196,27 @@ void Grammar::computeFollows() {
 
       size_t iHeadNonterm = nontermHash_[prod->head()];
       size_t iNonterm = nontermHash_[dynamic_cast<NonTerminal*>(item)];
-      for (size_t iTerm = 0; iTerm < terms_.size(); ++iTerm) {
-        if (follows_[iHeadNonterm][iTerm])
-          follows_[iNonterm][iTerm] = true;
-      }
-      if (!firsts_[iNonterm][EMPTY_TERM])
+      follows_[iNonterm] |= follows_[iHeadNonterm];
+      // for (size_t iTerm = 0; iTerm < terms_.size(); ++iTerm) {
+      //   if (follows_[iHeadNonterm][iTerm])
+      //     follows_[iNonterm][iTerm] = true;
+      // }
+      if (nonterms_[iNonterm]->nullable())
         break;
     }
   }
+  */
+
+#ifndef NDEBUG
+  for (size_t i = 0; i < nonterms_.size(); ++i) {
+    std::clog << "follow(" << *nonterms_[i] << ") = {";
+    for (size_t j = 0; j < terms_.size(); ++j)
+      if (follows_[i][j])
+        std::clog << *terms_[j] << ", ";
+    std::clog << "}" << std::endl;
+  }
+  std::clog << std::endl;
+#endif
 }
 
 Grammar Grammar::Builder::build() noexcept {
@@ -194,7 +260,8 @@ size_t LRParser::state(vector<GrammarItem *>&& items) {
   if (auto iter = stateHash_.find(itemSets); iter != stateHash_.end()) {
     return iter->second;
   } else {
-    gotoTable_.emplace_back(grammar_->nonterminals().size());
+    gotoTable_.emplace_back(grammar_->nonterminals().size(),
+                            static_cast<size_t>(-1));
     parseTable_.emplace_back(grammar_->terminals().size());
     auto state = states_.emplace_back(new GrammarState(std::move(items))).get();
     // stateHash_.emplace(state, states_.size() - 1);
@@ -233,17 +300,23 @@ void SLRParser::yieldClosure(GrammarState *state) {
     auto nonterm = lr0Item->production()->head();
     // if (size_t iNonTerm = grammar_->indexOfNonterm(nonterm); !state->isAdded(iNonTerm)) {
       // state->setAdded(iNonTerm);
-      if (auto sym = lr0Item->nextSym(); sym && sym->isNonTerminal()) {
-        auto nextNonterm = dynamic_cast<NonTerminal *>(sym);
-        size_t iNextNonterm = grammar_->indexOfNonterm(nextNonterm);
-        if (!added[iNextNonterm]) {
-          auto[begin, end] = grammar_->prodRange(nextNonterm);
-          for (size_t iProd = begin; iProd < end; ++iProd) {
-            const auto& prod = grammar_->productions()[iProd];
-            state->addItem(item(prod.get(), 0));
+      // if (auto sym = lr0Item->nextSym(); sym && sym->isNonTerminal()) {
+      for (auto sym : lr0Item->nextSyms()) {
+        if (sym->isNonTerminal()) {
+          auto nextNonterm = dynamic_cast<NonTerminal *>(sym);
+          size_t iNextNonterm = grammar_->indexOfNonterm(nextNonterm);
+          if (!added[iNextNonterm]) {
+            auto[begin, end] = grammar_->prodRange(nextNonterm);
+            for (size_t iProd = begin; iProd < end; ++iProd) {
+              const auto& prod = grammar_->productions()[iProd];
+              state->addItem(item(prod.get(), 0));
+            }
+            added[iNextNonterm] = true;
           }
-          added[iNextNonterm] = true;
-        }
+          if (!nextNonterm->nullable())
+            break;
+        } else
+          break;
       }
     // }
   }
@@ -299,18 +372,27 @@ void SLRParser::generateParseTable() {
         }
       }
     }
+#ifndef NDEBUG
+    std::clog << "state " << iState << ":\n" << *states_[iState] << std::endl;
+#endif
     // Set GOTO table for each grouped non-terminals.
     for (size_t iNonterm = 0; iNonterm < nNonterms; ++iNonterm)
       if (auto&& items = std::move(gotoItems[iNonterm]); !items.empty()) {
         gotoTable_[iState][iNonterm] = state(std::move(items));
+#ifndef NDEBUG
+        std::clog << *grammar_->nonterminals()[iNonterm] << ": goto state "
+            << gotoTable_[iState][iNonterm] << std::endl;
+#endif
       }
     // Set SHIFT actions of PARSE table for each grouped terminals.
-    for (size_t iTerm = 0; iTerm < nTerms; ++iTerm)
-      if (auto&& items = std::move(gotoItems[iTerm + nNonterms]); !items.empty()) {
+    for (size_t iTerm = 0; iTerm < nTerms; ++iTerm) {
+      if (auto&& items =
+            std::move(gotoItems[iTerm + nNonterms]); !items.empty()) {
         auto& action = parseTable_[iState][iTerm];
         bool shift = false;
         if (!action.empty() && action.isReduce()) {
-          const Production *lprod = grammar_->productions()[action.useProd].get();
+          const Production
+              *lprod = grammar_->productions()[action.useProd].get();
           const Production *rprod = prodOfTerm[iTerm];
           if (auto comp = lprod->priorierThan(rprod); comp == Production::LOWER)
             shift = true;
@@ -322,7 +404,21 @@ void SLRParser::generateParseTable() {
         if (shift)
           action = Action::SHIFT_(state(std::move(items)));
       }
+#ifndef NDEBUG
+      if (auto action = parseTable_[iState][iTerm]; !action.empty()) {
+        std::clog << *grammar_->terminals()[iTerm] << ": " << action << std::endl;
+      }
+#endif
+    }
+#ifndef NDEBUG
+    std::clog << std::endl;
+#endif
   }
+
+  for (auto& row : parseTable_)
+    for (auto& action : row)
+      if (action.empty())
+        action = Action::ERROR;
 }
 
 unique_ptr<ParsedTerm> SLRParser::parse(lex::Lexer& lexer) {
@@ -367,6 +463,7 @@ unique_ptr<ParsedTerm> SLRParser::parse(lex::Lexer& lexer) {
       return unique_ptr<ParsedTerm>(dynamic_cast<ParsedTerm*>(stack.top().sym.release()));
     case Action::ERROR: default:
       // TODO: process the errors.
+      stack.pop();
       break;
     }
   }
@@ -387,7 +484,7 @@ unique_ptr<const Grammar> Grammar::tigerGrammar() {
       .prod(g.nonterm("exp"), {g.nonterm("type_id"), g.term(Token::LBRACE), g.term(Token::RBRACE),})
       .prod(g.nonterm("exp"), {g.nonterm("type_id"), g.term(Token::LBRACE), g.term(Token::ID), g.term(Token::EQ), g.nonterm("exp"), g.nonterm("closure1"), g.term(Token::RBRACE),})
       .prod(g.nonterm("closure1"), {})
-      .prod(g.nonterm("closure1"), {g.nonterm("closure1"), g.term(Token::COMMA), g.term(Token::ID), g.term(Token::EQ), g.nonterm("exp"),})
+      .prod(g.nonterm("closure1"), {g.term(Token::COMMA), g.term(Token::ID), g.term(Token::EQ), g.nonterm("exp"), g.nonterm("closure1"),})
           // Object creation.
       // .prod(g.nonterm("exp"), {g.term(Token::NEW), g.nonterm("type_id"),})
 
@@ -398,7 +495,7 @@ unique_ptr<const Grammar> Grammar::tigerGrammar() {
       .prod(g.nonterm("exp"), {g.term(Token::ID), g.term(Token::LPAREN), g.term(Token::RPAREN),})
       .prod(g.nonterm("exp"), {g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("exp"), g.nonterm("closure2"), g.term(Token::RPAREN),})
       .prod(g.nonterm("closure2"), {})
-      .prod(g.nonterm("closure2"), {g.nonterm("closure2"), g.term(Token::COMMA), g.nonterm("exp"),})
+      .prod(g.nonterm("closure2"), {g.term(Token::COMMA), g.nonterm("exp"), g.nonterm("closure2"),})
 
           // Method call.
       .prod(g.nonterm("exp"), {g.nonterm("lvalue"), g.term(Token::DOT), g.term(Token::ID), g.term(Token::LPAREN), g.term(Token::RPAREN),})
@@ -425,10 +522,10 @@ unique_ptr<const Grammar> Grammar::tigerGrammar() {
 
       .prod(g.nonterm("exps"), {})
       .prod(g.nonterm("exps"), {g.nonterm("exp"), g.nonterm("closure3"),})
-      .prod(g.nonterm("closure3"), {g.nonterm("closure3"), g.term(Token::SEMICOLON), g.nonterm("exp"),})
+      .prod(g.nonterm("closure3"), {g.term(Token::SEMICOLON), g.nonterm("exp"), g.nonterm("closure3"),})
 
       .prod(g.nonterm("decs"), {})
-      .prod(g.nonterm("decs"), {g.nonterm("decs"), g.nonterm("dec"),})
+      .prod(g.nonterm("decs"), {g.nonterm("dec"), g.nonterm("decs"),})
 
           // Type declaration.
       .prod(g.nonterm("dec"), {g.term(Token::TYPE), g.term(Token::ID), g.term(Token::EQ), g.nonterm("ty"),})
@@ -466,7 +563,7 @@ unique_ptr<const Grammar> Grammar::tigerGrammar() {
       .prod(g.nonterm("tyfields"), {})
       .prod(g.nonterm("tyfields"), {g.term(Token::ID), g.term(Token::COLON), g.nonterm("type_id"), g.nonterm("closure4"),})
       .prod(g.nonterm("closure4"), {})
-      .prod(g.nonterm("closure4"), {g.nonterm("closure4"), g.term(Token::COMMA), g.term(Token::ID), g.term(Token::COLON), g.nonterm("type_id"),})
+      .prod(g.nonterm("closure4"), {g.term(Token::COMMA), g.term(Token::ID), g.term(Token::COLON), g.nonterm("type_id"), g.nonterm("closure4"),})
 
       .prod(g.nonterm("type_id"), {g.term(Token::ID),})
 

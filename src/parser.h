@@ -11,9 +11,11 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <ostream>
+#include <valarray>
 #include "lexer.h"
 
 using std::vector;
+using std::valarray;
 using std::deque;
 using std::unique_ptr;
 using std::unordered_map;
@@ -77,9 +79,12 @@ public:
     nonterminal.print(os);
     return os;
   }
+  constexpr void nullable(bool nullable) noexcept { nullable_ = nullable; }
+  constexpr bool nullable() const noexcept { return nullable_; }
 
 protected:
   string name_;
+  bool nullable_ = false;
 };
 
 class ParsedTerm : public NonTerminal {
@@ -124,7 +129,7 @@ public:
 protected:
   void print(std::ostream& os) const override {
     os << name() << "(";
-    for (size_t i = 0; i < children_.size() - 1; ++i)
+    for (size_t i = 0; i + 1 < children_.size(); ++i)
       os << *children_[i] << " ";
     if (!children_.empty())
       os << *children_.back();
@@ -162,6 +167,7 @@ public:
   Production& operator=(const Production& other) = default;
   Production& operator=(Production&& other) noexcept = default;
   size_t size() const noexcept { return body_.size(); }
+  bool empty() const noexcept { return body_.empty(); }
   Symbol *operator[](size_t index) const noexcept { return body_[index]; }
   constexpr NonTerminal *head() const noexcept { return head_; }
   friend std::ostream& operator<<(std::ostream& os,
@@ -252,6 +258,8 @@ public:
     Terminal *term(const Token& token);
     NonTerminal *nonterm(string name);
     Builder& prod(NonTerminal *nonterm, vector<Symbol*>&& syms) {
+      if (syms.empty())
+        nonterm->nullable(true);
       prods_.emplace_back(std::make_unique<Production>(nonterm, std::move(syms)));
       return *this;
     }
@@ -296,8 +304,8 @@ protected:
   unordered_map<const Production*, size_t> prodHash_;
   vector<std::pair<size_t, size_t>> prodRanges_;
   unordered_map<Token::Type, size_t> termTypeHash_;
-  vector<vector<bool>> firsts_;
-  vector<vector<bool>> follows_;
+  vector<valarray<bool>> firsts_;
+  vector<valarray<bool>> follows_;
   NonTerminal *aug_;
   Terminal *eof_;
 };
@@ -319,6 +327,19 @@ protected:
 };
 
 class LR0Item : public GrammarItem {
+private:
+  class SubRange {
+  public:
+    explicit constexpr SubRange(const LR0Item *item) noexcept : item_(item) {}
+
+    auto begin() { return item_->production()->body().begin() + item_->index(); }
+    auto end() { return item_->production()->body().end(); }
+    auto cbegin() const { return item_->production()->body().cbegin() + item_->index(); }
+    auto cend() const { return item_->production()->body().cend(); }
+  private:
+    const LR0Item *item_;
+  };
+
 public:
   explicit constexpr LR0Item(const Production *prod, size_t index) noexcept
       : GrammarItem(prod), index_(index) {}
@@ -329,6 +350,7 @@ public:
     else
       return nullptr;
   }
+  SubRange nextSyms() const { return SubRange(this); }
   constexpr size_t index() const noexcept { return index_; }
 
 protected:
@@ -384,6 +406,16 @@ struct Action {
   }
   static constexpr Action REDUCE_(size_t useProd) noexcept {
     return Action{REDUCE, useProd};
+  }
+
+  friend std::ostream& operator<<(std::ostream& os, const Action& action) {
+    switch (action.type) {
+    case SHIFT: return os << "shift state " << action.toState;
+    case REDUCE: return os << "reduce with " << action.useProd;
+    case ACCEPT: return os << "accept";
+    case ERROR: return os << "error";
+    default: return os;
+    }
   }
 };
 

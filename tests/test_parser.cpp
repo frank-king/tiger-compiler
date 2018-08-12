@@ -6,6 +6,66 @@
 #include "gtest/gtest.h"
 #include "parser.h"
 
+TEST(parser_test, test_empty_productions) {
+  using namespace tiger::lex;
+  using namespace tiger::syntax;
+  Grammar::Builder g;
+  g
+      .prod(g.nonterm("closure"), {})
+      .prod(g.nonterm("tuple"), {g.term(Token::LPAREN), g.term(Token::RPAREN),})
+      .prod(g.nonterm("tuple"), {g.term(Token::LPAREN), g.nonterm("item"), g.nonterm("closure"), g.term(Token::RPAREN),})
+      .prod(g.nonterm("closure"), {g.term(Token::COMMA), g.nonterm("item"), g.nonterm("closure"),})
+      .prod(g.nonterm("item"), {g.nonterm("tuple")})
+      .prod(g.nonterm("item"), {g.term(Token::ID)})
+      .startAt(g.nonterm("tuple"));
+
+  unique_ptr<const Grammar> grammar(new Grammar(g.build()));
+
+  string program("(a, b, (c), ())");
+  Lexer lexer(program);
+  auto parser = SLRParser::newInstance(std::move(grammar));
+
+  auto parseTree = parser->parse(lexer);
+  auto expectedParseTree = std::make_unique<ParsedTerm>("tuple", deque<Symbol*>{
+      new Terminal(Token::LPAREN),
+      new ParsedTerm("item", deque<Symbol *>{
+          new Terminal(Token::ID_("a")),
+      }),
+      new ParsedTerm("closure", deque<Symbol *>{
+          new Terminal(Token::COMMA),
+          new ParsedTerm("item", deque<Symbol *>{
+              new Terminal(Token::ID_("b")),
+          }),
+          new ParsedTerm("closure", deque<Symbol *>{
+              new Terminal(Token::COMMA),
+              new ParsedTerm("item", deque<Symbol *>{
+                  new ParsedTerm("tuple", deque<Symbol *>{
+                      new Terminal(Token::LPAREN),
+                      new ParsedTerm("item", deque<Symbol *>{
+                          new Terminal(Token::ID_("c")),
+                      }),
+                      new ParsedTerm("closure", {}),
+                      new Terminal(Token::RPAREN),
+                  }),
+              }),
+              new ParsedTerm("closure", deque<Symbol *>{
+                  new Terminal(Token::COMMA),
+                  new ParsedTerm("item", deque<Symbol *>{
+                      new ParsedTerm("tuple", deque<Symbol *>{
+                          new Terminal(Token::LPAREN),
+                          new Terminal(Token::RPAREN),
+                      }),
+                  }),
+                  new ParsedTerm("closure", {}),
+              }),
+          }),
+      }),
+      new Terminal(Token::RPAREN),
+  });
+
+  EXPECT_EQ(*parseTree, *expectedParseTree);
+}
+
 TEST(parser_test, test_ambiguious_grammar) {
   using namespace tiger::lex;
   using namespace tiger::syntax;
@@ -111,8 +171,8 @@ TEST(parser_test, test_simple_grammar) {
     EXPECT_EQ(**it1, **it2);
   }
 
-  vector<vector<bool>> firstsOf(nonterms.size());
-  vector<vector<bool>> followsOf(nonterms.size());
+  vector<valarray<bool>> firstsOf(nonterms.size());
+  vector<valarray<bool>> followsOf(nonterms.size());
   for (auto& firsts : firstsOf)
     firsts.resize(terms.size() + 1, false);
   for (auto& follows : followsOf)
@@ -127,8 +187,8 @@ TEST(parser_test, test_simple_grammar) {
   followsOf[2][0] = followsOf[2][1] = followsOf[2][3] = followsOf[2][5] = true;
   followsOf[3][5] = true;
   for (size_t i = 0; i < nonterms.size(); ++i) {
-    EXPECT_EQ(grammar->firstsOf(i), firstsOf[i]);
-    EXPECT_EQ(grammar->followsOf(i), followsOf[i]);
+    EXPECT_TRUE((grammar->firstsOf(i) == firstsOf[i]).min());
+    EXPECT_TRUE((grammar->followsOf(i) == followsOf[i]).min());
   }
 
   string program("a * b + c");
