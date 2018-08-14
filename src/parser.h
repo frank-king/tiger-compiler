@@ -25,10 +25,6 @@ namespace tiger::syntax {
 using lex::Token;
 class Symbol {
 public:
-  friend std::ostream &operator<<(std::ostream &os, const Symbol &symbol) {
-    symbol.print(os);
-    return os;
-  }
   virtual bool isTerminal() const noexcept = 0;
   virtual bool isNonTerminal() const noexcept = 0;
   virtual string name() const noexcept = 0;
@@ -38,45 +34,79 @@ public:
   bool operator!=(const Symbol& rhs) const noexcept {
     return !operator==(rhs);
   }
+  friend std::ostream &operator<<(std::ostream &os, const Symbol &symbol) {
+#ifndef NDEBUG
+    symbol.indentedPrint(os);
+#else
+    symbol.print(os);
+#endif
+    return os;
+  }
+  virtual void indentedPrint(std::ostream& os, size_t indent = 0) const {
+    printIndent(os, indent);
+    os << name();
+  }
+  virtual void print(std::ostream& os, size_t indent = 0) const {
+    os << name();
+  }
 
 protected:
-  virtual void print(std::ostream& os) const { os << name(); }
+  static void printIndent(std::ostream& os, size_t indent) {
+    for (size_t i = 0; i < indent; ++i)
+      os << "\t";
+  }
 };
 
 class Terminal : public Symbol {
 public:
   explicit Terminal(Token token) : token_(std::move(token)) {}
   explicit Terminal(Terminal&& other) noexcept = default;
+  explicit Terminal(const Terminal& other) = default;
   bool isTerminal() const noexcept override { return true; }
   bool isNonTerminal() const noexcept override { return false; }
   string name() const noexcept override { return token_.name(); }
   friend std::ostream& operator<<(std::ostream& os, const Terminal& terminal) {
+#ifndef NDEBUG
+    terminal.indentedPrint(os);
+#else
     terminal.print(os);
+#endif
     return os;
   }
-  bool operator==(const Symbol& rhs) const noexcept override {
-    return Symbol::operator==(rhs)
-        && token_ == dynamic_cast<const Terminal&>(rhs).token_;
-  }
-
-protected:
-  void print(std::ostream& os) const override {
+  void indentedPrint(std::ostream& os, size_t indent = 0) const override {
+    printIndent(os, indent);
     os << token_;
   }
+  void print(std::ostream& os, size_t indent = 0) const override {
+    os << token_;
+  }
+  bool operator==(const Symbol& rhs) const noexcept override {
+    return Symbol::operator==(rhs) && rhs.isTerminal() &&
+        operator==(dynamic_cast<const Terminal&>(rhs));
+  }
+  bool operator==(const Terminal& rhs) const noexcept {
+    return token_ == rhs.token_;
+  }
 
+
+protected:
   Token token_;
 };
 
 class NonTerminal : public Symbol {
 public:
-  explicit NonTerminal(string name) : name_(std::move(name)) {}
-  explicit NonTerminal(const char_t *name) : name_(name) {}
+  explicit NonTerminal(string name, bool isClosure = false)
+      : name_(std::move(name)), isClosure_(isClosure) {}
+  explicit NonTerminal(const char_t *name, bool isClosure = false)
+      : name_(name), isClosure_(isClosure) {}
   explicit NonTerminal(NonTerminal&& other) noexcept = default;
+  explicit NonTerminal(const NonTerminal& other) = default;
   bool isTerminal() const noexcept override { return false; }
   bool isNonTerminal() const noexcept override { return true; }
+  constexpr bool isClosure() const noexcept { return isClosure_; }
   string name() const noexcept override { return name_; }
   friend std::ostream& operator<<(std::ostream& os, const NonTerminal& nonterminal) {
-    nonterminal.print(os);
+    nonterminal.indentedPrint(os);
     return os;
   }
   constexpr void nullable(bool nullable) noexcept { nullable_ = nullable; }
@@ -85,12 +115,14 @@ public:
 protected:
   string name_;
   bool nullable_ = false;
+  bool isClosure_ = false;
 };
 
 class ParsedTerm : public NonTerminal {
 public:
-  explicit ParsedTerm(string name) : NonTerminal(std::move(name)) {}
-  explicit ParsedTerm(const char_t *name) : NonTerminal(name) {}
+  // explicit ParsedTerm(string name) : NonTerminal(std::move(name)) {}
+  // explicit ParsedTerm(const char_t *name) : NonTerminal(name) {}
+  explicit ParsedTerm(const NonTerminal& other) : NonTerminal(other) {}
   explicit ParsedTerm(ParsedTerm&& other) = default;
   explicit ParsedTerm(string name, deque<Symbol*>&& syms)
       : NonTerminal(std::move(name)) {
@@ -105,29 +137,36 @@ public:
   void addChildBack(unique_ptr<Symbol>&& child) {
     children_.emplace_back(std::move(child));
   }
-  Symbol *operator[](size_t index) const noexcept { return children_[index].get(); }
+
+  const auto& children() const & noexcept { return children_; }
+  auto children() && noexcept { return std::move(children_); }
+  // Symbol *operator[](size_t index) const noexcept { return children_[index].get(); }
+  bool empty() const noexcept { return  children_.empty(); }
 
   friend std::ostream& operator<<(std::ostream& os, const ParsedTerm& term) {
+#ifndef NDEBUG
+    term.indentedPrint(os);
+#else
     term.print(os);
+#endif
     return os;
   }
-  bool operator==(const ParsedTerm& rhs) const {
-    if (name() != rhs.name())
-      return false;
-    if (children_.size() != rhs.children_.size())
-      return false;
-    for (auto it = children_.cbegin(), itr = rhs.children_.cbegin();
-         it != children_.cend() && itr != rhs.children_.cend(); ++it, ++itr)
-      if (**it != **itr)
-        return false;
-    return true;
+  void indentedPrint(std::ostream& os, size_t indent = 0) const override {
+    printIndent(os, indent);
+    os << name() << "(";
+    if (children_.size() == 1 && children_.back()->isTerminal()) {
+      os << *children_.back();
+    } else {
+      os << "\n";
+      for (size_t i = 0; i < children_.size(); ++i) {
+        children_[i]->print(os, indent + 1);
+        os << "\n";
+      }
+      printIndent(os, indent);
+    }
+    os << ")";
   }
-  bool operator!=(const ParsedTerm& rhs) const {
-    return !(rhs == *this);
-  }
-
-protected:
-  void print(std::ostream& os) const override {
+  void print(std::ostream& os, size_t indent = 0) const override {
     os << name() << "(";
     for (size_t i = 0; i + 1 < children_.size(); ++i)
       os << *children_[i] << " ";
@@ -136,6 +175,24 @@ protected:
     os << ")";
   }
 
+  bool operator==(const Symbol& rhs) const noexcept override {
+    return Symbol::operator==(rhs) && rhs.isNonTerminal() &&
+        operator==(dynamic_cast<const ParsedTerm&>(rhs));
+  }
+  bool operator!=(const ParsedTerm& rhs) const noexcept {
+    return !(rhs == *this);
+  }
+  bool operator==(const ParsedTerm& rhs) const noexcept {
+    if (children_.size() != rhs.children_.size())
+      return false;
+    for (auto it = children_.cbegin(), itr = rhs.children_.cbegin();
+         it != children_.cend() && itr != rhs.children_.cend(); ++it, ++itr)
+      if (**it != **itr)
+        return false;
+    return true;
+  }
+
+protected:
   deque<unique_ptr<Symbol>> children_;
 };
 
@@ -147,7 +204,7 @@ public:
     PROTECTED = 0,
     FIRST, SECOND, THIRD, FOURTH, FIFTH, SIXTH, SEVENTH, EIGHTH, NINTH, TENTH,
   };
-  enum PriorityComp { ERROR = -1, HIGHER, LOWER, };
+  enum PriorityComp { DEFAULT = -2, ERROR = -1, HIGHER, LOWER, };
 
   struct Attribute {
     Associative assoc;
@@ -195,13 +252,14 @@ public:
   }
 
   PriorityComp priorierThan(const Production *rhs) const {
-    if (prior() == UNDEF || rhs->prior() == UNDEF ||
-        assoc() == NONE || rhs->assoc() == NONE)
-      return ERROR;
+    if (prior() == UNDEF && rhs->prior() == UNDEF)
+      return DEFAULT;
     else if (prior() < rhs->prior())
       return HIGHER;
     else if (prior() > rhs->prior())
       return LOWER;
+    else if (assoc() == NONE || rhs->assoc() == NONE)
+      return ERROR;
     else if (assoc() == LEFT)
       return HIGHER;
     else if (assoc() == RIGHT)
@@ -257,6 +315,7 @@ public:
   public:
     Terminal *term(const Token& token);
     NonTerminal *nonterm(string name);
+    NonTerminal *closure(string name);
     Builder& prod(NonTerminal *nonterm, vector<Symbol*>&& syms) {
       if (syms.empty())
         nonterm->nullable(true);

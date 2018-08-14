@@ -11,10 +11,10 @@ TEST(parser_test, test_empty_productions) {
   using namespace tiger::syntax;
   Grammar::Builder g;
   g
-      .prod(g.nonterm("closure"), {})
       .prod(g.nonterm("tuple"), {g.term(Token::LPAREN), g.term(Token::RPAREN),})
-      .prod(g.nonterm("tuple"), {g.term(Token::LPAREN), g.nonterm("item"), g.nonterm("closure"), g.term(Token::RPAREN),})
-      .prod(g.nonterm("closure"), {g.term(Token::COMMA), g.nonterm("item"), g.nonterm("closure"),})
+      .prod(g.nonterm("tuple"), {g.term(Token::LPAREN), g.nonterm("item"), g.closure("closure"), g.term(Token::RPAREN),})
+      .prod(g.closure("closure"), {g.term(Token::COMMA), g.nonterm("item"), g.closure("closure"),})
+      .prod(g.closure("closure"), {})
       .prod(g.nonterm("item"), {g.nonterm("tuple")})
       .prod(g.nonterm("item"), {g.term(Token::ID)})
       .startAt(g.nonterm("tuple"));
@@ -31,33 +31,25 @@ TEST(parser_test, test_empty_productions) {
       new ParsedTerm("item", deque<Symbol *>{
           new Terminal(Token::ID_("a")),
       }),
-      new ParsedTerm("closure", deque<Symbol *>{
-          new Terminal(Token::COMMA),
-          new ParsedTerm("item", deque<Symbol *>{
-              new Terminal(Token::ID_("b")),
-          }),
-          new ParsedTerm("closure", deque<Symbol *>{
-              new Terminal(Token::COMMA),
+      new Terminal(Token::COMMA),
+      new ParsedTerm("item", deque<Symbol *>{
+          new Terminal(Token::ID_("b")),
+      }),
+      new Terminal(Token::COMMA),
+      new ParsedTerm("item", deque<Symbol *>{
+          new ParsedTerm("tuple", deque<Symbol *>{
+              new Terminal(Token::LPAREN),
               new ParsedTerm("item", deque<Symbol *>{
-                  new ParsedTerm("tuple", deque<Symbol *>{
-                      new Terminal(Token::LPAREN),
-                      new ParsedTerm("item", deque<Symbol *>{
-                          new Terminal(Token::ID_("c")),
-                      }),
-                      new ParsedTerm("closure", {}),
-                      new Terminal(Token::RPAREN),
-                  }),
+                  new Terminal(Token::ID_("c")),
               }),
-              new ParsedTerm("closure", deque<Symbol *>{
-                  new Terminal(Token::COMMA),
-                  new ParsedTerm("item", deque<Symbol *>{
-                      new ParsedTerm("tuple", deque<Symbol *>{
-                          new Terminal(Token::LPAREN),
-                          new Terminal(Token::RPAREN),
-                      }),
-                  }),
-                  new ParsedTerm("closure", {}),
-              }),
+              new Terminal(Token::RPAREN),
+          }),
+      }),
+      new Terminal(Token::COMMA),
+      new ParsedTerm("item", deque<Symbol *>{
+          new ParsedTerm("tuple", deque<Symbol *>{
+              new Terminal(Token::LPAREN),
+              new Terminal(Token::RPAREN),
           }),
       }),
       new Terminal(Token::RPAREN),
@@ -85,25 +77,29 @@ TEST(parser_test, test_ambiguious_grammar) {
   auto parseTree = parser->parse(lexer);
   auto expectedParseTree = std::make_unique<ParsedTerm>("E", deque<Symbol*>{
       new ParsedTerm("E", deque<Symbol*>{
+          new Terminal(Token::LPAREN),
           new ParsedTerm("E", deque<Symbol *>{
               new ParsedTerm("E", deque<Symbol *>{
-                  new Terminal(Token::ID_("a")),
+                  new ParsedTerm("E", deque<Symbol *>{
+                      new Terminal(Token::ID_("a")),
+                  }),
+                  new Terminal(Token::TIMES),
+                  new ParsedTerm("E", deque<Symbol *>{
+                      new Terminal(Token::ID_("b")),
+                  }),
               }),
-              new Terminal(Token::TIMES),
+              new Terminal(Token::PLUS),
               new ParsedTerm("E", deque<Symbol *>{
-                  new Terminal(Token::ID_("b")),
+                  new ParsedTerm("E", deque<Symbol *>{
+                      new Terminal(Token::ID_("c")),
+                  }),
+                  new Terminal(Token::TIMES),
+                  new ParsedTerm("E", deque<Symbol *>{
+                      new Terminal(Token::ID_("d")),
+                  }),
               }),
           }),
-          new Terminal(Token::PLUS),
-          new ParsedTerm("E", deque<Symbol *>{
-              new ParsedTerm("E", deque<Symbol *>{
-                  new Terminal(Token::ID_("c")),
-              }),
-              new Terminal(Token::TIMES),
-              new ParsedTerm("E", deque<Symbol *>{
-                  new Terminal(Token::ID_("d")),
-              }),
-          }),
+          new Terminal(Token::RPAREN),
       }),
       new Terminal(Token::TIMES),
       new ParsedTerm("E", deque<Symbol *>{
@@ -198,23 +194,25 @@ TEST(parser_test, test_simple_grammar) {
 
   auto parseTree = parser->parse(lexer);
   auto expectedParseTree = std::make_unique<ParsedTerm>("E", deque<Symbol*>{
-    new ParsedTerm("E", deque<Symbol*>{
+      new ParsedTerm("E", deque<Symbol*>{
+          new ParsedTerm("T", deque<Symbol*>{
+              new ParsedTerm("T", deque<Symbol*>{
+                  new ParsedTerm("F", deque<Symbol*>{
+                      new Terminal(Token::ID_("a")),
+                  }),
+              }),
+              new Terminal(Token::TIMES),
+              new ParsedTerm("F", deque<Symbol*>{
+                  new Terminal(Token::ID_("b")),
+              }),
+          }),
+      }),
+      new Terminal(Token::PLUS),
       new ParsedTerm("T", deque<Symbol*>{
-        new ParsedTerm("F", deque<Symbol*>{
-          new Terminal(Token::ID_("a")),
-        }),
+          new ParsedTerm("F", deque<Symbol*>{
+              new Terminal(Token::ID_("c")),
+          }),
       }),
-      new Terminal(Token::TIMES),
-      new ParsedTerm("F", deque<Symbol*>{
-          new Terminal(Token::ID_("b")),
-      }),
-    }),
-    new Terminal(Token::PLUS),
-    new ParsedTerm("T", deque<Symbol*>{
-        new ParsedTerm("F", deque<Symbol*>{
-            new Terminal(Token::ID_("c")),
-        }),
-    }),
   });
 
   EXPECT_EQ(*parseTree, *expectedParseTree);
@@ -232,31 +230,34 @@ TEST(parser_test, test_grammar) {
   nonterms.emplace_back(new NonTerminal("exp"));
   nonterms.emplace_back(new NonTerminal("program"));
   nonterms.emplace_back(new NonTerminal("decs"));
-  nonterms.emplace_back(new NonTerminal("type_id"));
+  // nonterms.emplace_back(new NonTerminal("type_id"));
   nonterms.emplace_back(new NonTerminal("closure1"));
   nonterms.emplace_back(new NonTerminal("lvalue"));
   nonterms.emplace_back(new NonTerminal("closure2"));
   // nonterms.emplace_back(new NonTerminal("opexp"));
   nonterms.emplace_back(new NonTerminal("exps"));
   nonterms.emplace_back(new NonTerminal("closure3"));
+  nonterms.emplace_back(new NonTerminal("closure4"));
+  nonterms.emplace_back(new NonTerminal("closure5"));
   nonterms.emplace_back(new NonTerminal("dec"));
   nonterms.emplace_back(new NonTerminal("ty"));
   // nonterms.emplace_back(new NonTerminal("classfields"));
   nonterms.emplace_back(new NonTerminal("vardec"));
   nonterms.emplace_back(new NonTerminal("tyfields"));
   // nonterms.emplace_back(new NonTerminal("classfield"));
-  nonterms.emplace_back(new NonTerminal("closure4"));
+  nonterms.emplace_back(new NonTerminal("closure6"));
   nonterms.emplace_back(new NonTerminal(" aug"));
 
   terms.emplace_back(new Terminal(Token::NIL));
   terms.emplace_back(new Terminal(Token::INT));
   terms.emplace_back(new Terminal(Token::STRING));
+  terms.emplace_back(new Terminal(Token::ID));
   terms.emplace_back(new Terminal(Token::LBRACK));
   terms.emplace_back(new Terminal(Token::RBRACK));
   terms.emplace_back(new Terminal(Token::OF));
   terms.emplace_back(new Terminal(Token::LBRACE));
   terms.emplace_back(new Terminal(Token::RBRACE));
-  terms.emplace_back(new Terminal(Token::ID));
+  // terms.emplace_back(new Terminal(Token::ID));
   terms.emplace_back(new Terminal(Token::EQ));
   terms.emplace_back(new Terminal(Token::COMMA));
   // terms.emplace_back(new Terminal(Token::NEW));
@@ -350,20 +351,660 @@ TEST(parser_test, test_parser) {
   Lexer lexer(program);
   auto parser = SLRParser::newInstance(Grammar::tigerGrammar());
   unique_ptr<ParsedTerm> parseTree = parser->parse(lexer);
-  BOOST_LOG_TRIVIAL(debug) << *parseTree;
-  /*
-  using Symbols = deque<unique_ptr<Symbol>>;
-  auto expectedParseTree = std::make_unique<ParsedTerm>(
-      "_aug", Symbols{
-        new ParsedTerm("program", Symbols{
-            new ParsedTerm("exp", Symbols{
-                new Terminal(Token::LET),
-                new ParsedTerm("decs"),
-                new Terminal(Token::IN),
-                new ParsedTerm("exps"),
-                new Terminal(Token::END),
-            }),
-        }),
-      });
-   */
+#ifndef NDEBUG
+  std::clog << *parseTree;
+#endif
+  using Symbols = deque<Symbol*>;
+  auto expectedParseTree = std::make_unique<ParsedTerm>("program", Symbols{
+      new ParsedTerm("exp", Symbols{
+          new Terminal(Token::LET),
+          new ParsedTerm("decs", Symbols{
+              new ParsedTerm("dec", Symbols{
+                  new ParsedTerm("vardec", Symbols{
+                      new Terminal(Token::VAR),
+                      new Terminal(Token::ID_("N")),
+                      new Terminal(Token::ASSIGN),
+                      new ParsedTerm("exp", Symbols{
+                          new Terminal(Token::INT_(8)),
+                      }),
+                  }),
+              }),
+              new ParsedTerm("dec", Symbols{
+                  new Terminal(Token::TYPE),
+                  new Terminal(Token::ID_("intArray")),
+                  new Terminal(Token::EQ),
+                  new ParsedTerm("ty", Symbols{
+                      new Terminal(Token::ARRAY),
+                      new Terminal(Token::OF),
+                      new Terminal(Token::ID_("int")),
+                  }),
+              }),
+              new ParsedTerm("dec", Symbols{
+                  new ParsedTerm("vardec", Symbols{
+                      new Terminal(Token::VAR),
+                      new Terminal(Token::ID_("row")),
+                      new Terminal(Token::ASSIGN),
+                      new ParsedTerm("exp", Symbols{
+                          new Terminal(Token::ID_("intArray")),
+                          new Terminal(Token::LBRACK),
+                          new ParsedTerm("exp", Symbols{
+                              new ParsedTerm("lvalue", Symbols{
+                                  new Terminal(Token::ID_("N")),
+                              }),
+                          }),
+                          new Terminal(Token::RBRACK),
+                          new Terminal(Token::OF),
+                          new ParsedTerm("exp", Symbols{
+                              new Terminal(Token::INT_(0)),
+                          }),
+                      }),
+                  }),
+              }),
+              new ParsedTerm("dec", Symbols{
+                  new ParsedTerm("vardec", Symbols{
+                      new Terminal(Token::VAR),
+                      new Terminal(Token::ID_("col")),
+                      new Terminal(Token::ASSIGN),
+                      new ParsedTerm("exp", Symbols{
+                          new Terminal(Token::ID_("intArray")),
+                          new Terminal(Token::LBRACK),
+                          new ParsedTerm("exp", Symbols{
+                              new ParsedTerm("lvalue", Symbols{
+                                  new Terminal(Token::ID_("N")),
+                              }),
+                          }),
+                          new Terminal(Token::RBRACK),
+                          new Terminal(Token::OF),
+                          new ParsedTerm("exp", Symbols{
+                              new Terminal(Token::INT_(0)),
+                          }),
+                      }),
+                  }),
+              }),
+              new ParsedTerm("dec", Symbols{
+                  new ParsedTerm("vardec", Symbols{
+                      new Terminal(Token::VAR),
+                      new Terminal(Token::ID_("diag1")),
+                      new Terminal(Token::ASSIGN),
+                      new ParsedTerm("exp", Symbols{
+                          new Terminal(Token::ID_("intArray")),
+                          new Terminal(Token::LBRACK),
+                          new ParsedTerm("exp", Symbols{
+                              new ParsedTerm("exp", Symbols{
+                                  new ParsedTerm("exp", Symbols{
+                                      new ParsedTerm("lvalue", Symbols{
+                                          new Terminal(Token::ID_("N")),
+                                      }),
+                                  }),
+                                  new Terminal(Token::PLUS),
+                                  new ParsedTerm("exp", Symbols{
+                                      new ParsedTerm("lvalue", Symbols{
+                                          new Terminal(Token::ID_("N")),
+                                      }),
+                                  }),
+                              }),
+                              new Terminal(Token::MINUS),
+                              new ParsedTerm("exp", Symbols{
+                                  new Terminal(Token::INT_(1)),
+                              }),
+                          }),
+                          new Terminal(Token::RBRACK),
+                          new Terminal(Token::OF),
+                          new ParsedTerm("exp", Symbols{
+                              new Terminal(Token::INT_(0)),
+                          }),
+                      }),
+                  }),
+              }),
+              new ParsedTerm("dec", Symbols{
+                  new ParsedTerm("vardec", Symbols{
+                      new Terminal(Token::VAR),
+                      new Terminal(Token::ID_("diag2")),
+                      new Terminal(Token::ASSIGN),
+                      new ParsedTerm("exp", Symbols{
+                          new Terminal(Token::ID_("intArray")),
+                          new Terminal(Token::LBRACK),
+                          new ParsedTerm("exp", Symbols{
+                              new ParsedTerm("exp", Symbols{
+                                  new ParsedTerm("exp", Symbols{
+                                      new ParsedTerm("lvalue", Symbols{
+                                          new Terminal(Token::ID_("N")),
+                                      }),
+                                  }),
+                                  new Terminal(Token::PLUS),
+                                  new ParsedTerm("exp", Symbols{
+                                      new ParsedTerm("lvalue", Symbols{
+                                          new Terminal(Token::ID_("N")),
+                                      }),
+                                  }),
+                              }),
+                              new Terminal(Token::MINUS),
+                              new ParsedTerm("exp", Symbols{
+                                  new Terminal(Token::INT_(1)),
+                              }),
+                          }),
+                          new Terminal(Token::RBRACK),
+                          new Terminal(Token::OF),
+                          new ParsedTerm("exp", Symbols{
+                              new Terminal(Token::INT_(0)),
+                          }),
+                      }),
+                  }),
+              }),
+              new ParsedTerm("dec", Symbols{
+                  new Terminal(Token::FUNCTION),
+                  new Terminal(Token::ID_("printboard")),
+                  new Terminal(Token::LPAREN),
+                  new Terminal(Token::RPAREN),
+                  new Terminal(Token::EQ),
+                  new ParsedTerm("exp", Symbols{
+                      new Terminal(Token::LPAREN),
+                      new ParsedTerm("exps", Symbols{
+                          new ParsedTerm("exp", Symbols{
+                              new Terminal(Token::FOR),
+                              new Terminal(Token::ID_("i")),
+                              new Terminal(Token::ASSIGN),
+                              new ParsedTerm("exp", Symbols{
+                                  new Terminal(Token::INT_(0)),
+                              }),
+                              new Terminal(Token::TO),
+                              new ParsedTerm("exp", Symbols{
+                                  new ParsedTerm("exp", Symbols{
+                                      new ParsedTerm("lvalue", Symbols{
+                                          new Terminal(Token::ID_("N")),
+                                      }),
+                                  }),
+                                  new Terminal(Token::MINUS),
+                                  new ParsedTerm("exp", Symbols{
+                                      new Terminal(Token::INT_(1)),
+                                  }),
+                              }),
+                              new Terminal(Token::DO),
+                              new ParsedTerm("exp", Symbols{
+                                  new Terminal(Token::LPAREN),
+                                  new ParsedTerm("exps", Symbols{
+                                      new ParsedTerm("exp", Symbols{
+                                          new Terminal(Token::FOR),
+                                          new Terminal(Token::ID_("j")),
+                                          new Terminal(Token::ASSIGN),
+                                          new ParsedTerm("exp", Symbols{
+                                              new Terminal(Token::INT_(0)),
+                                          }),
+                                          new Terminal(Token::TO),
+                                          new ParsedTerm("exp", Symbols{
+                                              new ParsedTerm("exp", Symbols{
+                                                  new ParsedTerm("lvalue", Symbols{
+                                                      new Terminal(Token::ID_("N")),
+                                                  }),
+                                              }),
+                                              new Terminal(Token::MINUS),
+                                              new ParsedTerm("exp", Symbols{
+                                                  new Terminal(Token::INT_(1)),
+                                              }),
+                                          }),
+                                          new Terminal(Token::DO),
+                                          new ParsedTerm("exp", Symbols{
+                                              new Terminal(Token::ID_("print")),
+                                              new Terminal(Token::LPAREN),
+                                              new ParsedTerm("exp", Symbols{
+                                                  new Terminal(Token::IF),
+                                                  new ParsedTerm("exp", Symbols{
+                                                      new ParsedTerm("exp", Symbols{
+                                                          new ParsedTerm("lvalue", Symbols{
+                                                              new Terminal(Token::ID_("col")),
+                                                              new Terminal(Token::LBRACK),
+                                                              new ParsedTerm("exp", Symbols{
+                                                                  new ParsedTerm("lvalue", Symbols{
+                                                                      new Terminal(Token::ID_("i")),
+                                                                  }),
+                                                              }),
+                                                              new Terminal(Token::RBRACK),
+                                                          }),
+                                                      }),
+                                                      new Terminal(Token::EQ),
+                                                      new ParsedTerm("exp", Symbols{
+                                                          new ParsedTerm("lvalue", Symbols{
+                                                              new Terminal(Token::ID_("j")),
+                                                          }),
+                                                      }),
+                                                  }),
+                                                  new Terminal(Token::THEN),
+                                                  new ParsedTerm("exp", Symbols{
+                                                      new Terminal(Token::STRING_(" O")),
+                                                  }),
+                                                  new Terminal(Token::ELSE),
+                                                  new ParsedTerm("exp", Symbols{
+                                                      new Terminal(Token::STRING_(" .")),
+                                                  }),
+                                              }),
+                                              new Terminal(Token::RPAREN),
+                                          }),
+                                      }),
+                                      new Terminal(Token::SEMICOLON),
+                                      new ParsedTerm("exp", Symbols{
+                                          new Terminal(Token::ID_("print")),
+                                          new Terminal(Token::LPAREN),
+                                          new ParsedTerm("exp", Symbols{
+                                              new Terminal(Token::STRING_("\n")),
+                                          }),
+                                          new Terminal(Token::RPAREN),
+                                      }),
+                                  }),
+                                  new Terminal(Token::RPAREN),
+                              }),
+                          }),
+                          new Terminal(Token::SEMICOLON),
+                          new ParsedTerm("exp", Symbols{
+                              new Terminal(Token::ID_("print")),
+                              new Terminal(Token::LPAREN),
+                              new ParsedTerm("exp", Symbols{
+                                  new Terminal(Token::STRING_("\n")),
+                              }),
+                              new Terminal(Token::RPAREN),
+                          }),
+                      }),
+                      new Terminal(Token::RPAREN),
+                  }),
+              }),
+              new ParsedTerm("dec", Symbols{
+                  new Terminal(Token::FUNCTION),
+                  new Terminal(Token::ID_("try")),
+                  new Terminal(Token::LPAREN),
+                  new ParsedTerm("tyfields", Symbols{
+                      new Terminal(Token::ID_("c")),
+                      new Terminal(Token::COLON),
+                      new Terminal(Token::ID_("int")),
+                  }),
+                  new Terminal(Token::RPAREN),
+                  new Terminal(Token::EQ),
+                  new ParsedTerm("exp", Symbols{
+                      new Terminal(Token::IF),
+                      new ParsedTerm("exp", Symbols{
+                          new ParsedTerm("exp", Symbols{
+                              new ParsedTerm("lvalue", Symbols{
+                                  new Terminal(Token::ID_("c")),
+                              }),
+                          }),
+                          new Terminal(Token::EQ),
+                          new ParsedTerm("exp", Symbols{
+                              new ParsedTerm("lvalue", Symbols{
+                                  new Terminal(Token::ID_("N")),
+                              }),
+                          }),
+                      }),
+                      new Terminal(Token::THEN),
+                      new ParsedTerm("exp", Symbols{
+                          new Terminal(Token::ID_("printboard")),
+                          new Terminal(Token::LPAREN),
+                          new Terminal(Token::RPAREN),
+                      }),
+                      new Terminal(Token::ELSE),
+                      new ParsedTerm("exp", Symbols{
+                          new Terminal(Token::FOR),
+                          new Terminal(Token::ID_("r")),
+                          new Terminal(Token::ASSIGN),
+                          new ParsedTerm("exp", Symbols{
+                              new Terminal(Token::INT_(0)),
+                          }),
+                          new Terminal(Token::TO),
+                          new ParsedTerm("exp", Symbols{
+                              new ParsedTerm("exp", Symbols{
+                                  new ParsedTerm("lvalue", Symbols{
+                                      new Terminal(Token::ID_("N")),
+                                  }),
+                              }),
+                              new Terminal(Token::MINUS),
+                              new ParsedTerm("exp", Symbols{
+                                  new Terminal(Token::INT_(1)),
+                              }),
+                          }),
+                          new Terminal(Token::DO),
+                          new ParsedTerm("exp", Symbols{
+                              new Terminal(Token::IF),
+                              new ParsedTerm("exp", Symbols{
+                                  new ParsedTerm("exp", Symbols{
+                                      new ParsedTerm("exp", Symbols{
+                                          new ParsedTerm("exp", Symbols{
+                                              new ParsedTerm("lvalue", Symbols{
+                                                  new Terminal(Token::ID_("row")),
+                                                  new Terminal(Token::LBRACK),
+                                                  new ParsedTerm("exp", Symbols{
+                                                      new ParsedTerm("lvalue", Symbols{
+                                                          new Terminal(Token::ID_("r")),
+                                                      }),
+                                                  }),
+                                                  new Terminal(Token::RBRACK),
+                                              }),
+                                          }),
+                                          new Terminal(Token::EQ),
+                                          new ParsedTerm("exp", Symbols{
+                                              new Terminal(Token::INT_(0)),
+                                          }),
+                                      }),
+                                      new Terminal(Token::AND),
+                                      new ParsedTerm("exp", Symbols{
+                                          new ParsedTerm("exp", Symbols{
+                                              new ParsedTerm("lvalue", Symbols{
+                                                  new Terminal(Token::ID_("diag1")),
+                                                  new Terminal(Token::LBRACK),
+                                                  new ParsedTerm("exp", Symbols{
+                                                      new ParsedTerm("exp", Symbols{
+                                                          new ParsedTerm("lvalue", Symbols{
+                                                              new Terminal(Token::ID_("r")),
+                                                          }),
+                                                      }),
+                                                      new Terminal(Token::PLUS),
+                                                      new ParsedTerm("exp", Symbols{
+                                                          new ParsedTerm("lvalue", Symbols{
+                                                              new Terminal(Token::ID_("c")),
+                                                          }),
+                                                      }),
+                                                  }),
+                                                  new Terminal(Token::RBRACK),
+                                              }),
+                                          }),
+                                          new Terminal(Token::EQ),
+                                          new ParsedTerm("exp", Symbols{
+                                              new Terminal(Token::INT_(0)),
+                                          }),
+                                      }),
+                                  }),
+                                  new Terminal(Token::AND),
+                                  new ParsedTerm("exp", Symbols{
+                                      new ParsedTerm("exp", Symbols{
+                                          new ParsedTerm("lvalue", Symbols{
+                                              new Terminal(Token::ID_("diag2")),
+                                              new Terminal(Token::LBRACK),
+                                              new ParsedTerm("exp", Symbols{
+                                                  new ParsedTerm("exp", Symbols{
+                                                      new ParsedTerm("exp", Symbols{
+                                                          new ParsedTerm("lvalue", Symbols{
+                                                              new Terminal(Token::ID_("r")),
+                                                          }),
+                                                      }),
+                                                      new Terminal(Token::PLUS),
+                                                      new ParsedTerm("exp", Symbols{
+                                                          new Terminal(Token::INT_(7)),
+                                                      }),
+                                                  }),
+                                                  new Terminal(Token::MINUS),
+                                                  new ParsedTerm("exp", Symbols{
+                                                      new ParsedTerm("lvalue", Symbols{
+                                                          new Terminal(Token::ID_("c")),
+                                                      }),
+                                                  }),
+                                              }),
+                                              new Terminal(Token::RBRACK),
+                                          }),
+                                      }),
+                                      new Terminal(Token::EQ),
+                                      new ParsedTerm("exp", Symbols{
+                                          new Terminal(Token::INT_(0)),
+                                      }),
+                                  }),
+                              }),
+                              new Terminal(Token::THEN),
+                              new ParsedTerm("exp", Symbols{
+                                  new Terminal(Token::LPAREN),
+                                  new ParsedTerm("exps", Symbols{
+                                      new ParsedTerm("exp", Symbols{
+                                          new ParsedTerm("lvalue", Symbols{
+                                              new Terminal(Token::ID_("row")),
+                                              new Terminal(Token::LBRACK),
+                                              new ParsedTerm("exp", Symbols{
+                                                  new ParsedTerm("lvalue", Symbols{
+                                                      new Terminal(Token::ID_("r")),
+                                                  }),
+                                              }),
+                                              new Terminal(Token::RBRACK),
+                                          }),
+                                          new Terminal(Token::ASSIGN),
+                                          new ParsedTerm("exp", Symbols{
+                                              new Terminal(Token::INT_(1)),
+                                          }),
+                                      }),
+                                      new Terminal(Token::SEMICOLON),
+                                      new ParsedTerm("exp", Symbols{
+                                          new ParsedTerm("lvalue", Symbols{
+                                              new Terminal(Token::ID_("diag1")),
+                                              new Terminal(Token::LBRACK),
+                                              new ParsedTerm("exp", Symbols{
+                                                  new ParsedTerm("exp", Symbols{
+                                                      new ParsedTerm("lvalue", Symbols{
+                                                          new Terminal(Token::ID_("r")),
+                                                      }),
+                                                  }),
+                                                  new Terminal(Token::PLUS),
+                                                  new ParsedTerm("exp", Symbols{
+                                                      new ParsedTerm("lvalue", Symbols{
+                                                          new Terminal(Token::ID_("c")),
+                                                      }),
+                                                  }),
+                                              }),
+                                              new Terminal(Token::RBRACK),
+                                          }),
+                                          new Terminal(Token::ASSIGN),
+                                          new ParsedTerm("exp", Symbols{
+                                              new Terminal(Token::INT_(1)),
+                                          }),
+                                      }),
+                                      new Terminal(Token::SEMICOLON),
+                                      new ParsedTerm("exp", Symbols{
+                                          new ParsedTerm("lvalue", Symbols{
+                                              new Terminal(Token::ID_("diag2")),
+                                              new Terminal(Token::LBRACK),
+                                              new ParsedTerm("exp", Symbols{
+                                                  new ParsedTerm("exp", Symbols{
+                                                      new ParsedTerm("exp", Symbols{
+                                                          new ParsedTerm("lvalue", Symbols{
+                                                              new Terminal(Token::ID_("r")),
+                                                          }),
+                                                      }),
+                                                      new Terminal(Token::PLUS),
+                                                      new ParsedTerm("exp", Symbols{
+                                                          new Terminal(Token::INT_(7)),
+                                                      }),
+                                                  }),
+                                                  new Terminal(Token::MINUS),
+                                                  new ParsedTerm("exp", Symbols{
+                                                      new ParsedTerm("lvalue", Symbols{
+                                                          new Terminal(Token::ID_("c")),
+                                                      }),
+                                                  }),
+                                              }),
+                                              new Terminal(Token::RBRACK),
+                                          }),
+                                          new Terminal(Token::ASSIGN),
+                                          new ParsedTerm("exp", Symbols{
+                                              new Terminal(Token::INT_(1)),
+                                          }),
+                                      }),
+                                      new Terminal(Token::SEMICOLON),
+                                      new ParsedTerm("exp", Symbols{
+                                          new ParsedTerm("lvalue", Symbols{
+                                              new Terminal(Token::ID_("col")),
+                                              new Terminal(Token::LBRACK),
+                                              new ParsedTerm("exp", Symbols{
+                                                  new ParsedTerm("lvalue", Symbols{
+                                                      new Terminal(Token::ID_("c")),
+                                                  }),
+                                              }),
+                                              new Terminal(Token::RBRACK),
+                                          }),
+                                          new Terminal(Token::ASSIGN),
+                                          new ParsedTerm("exp", Symbols{
+                                              new ParsedTerm("lvalue", Symbols{
+                                                  new Terminal(Token::ID_("r")),
+                                              }),
+                                          }),
+                                      }),
+                                      new Terminal(Token::SEMICOLON),
+                                      new ParsedTerm("exp", Symbols{
+                                          new Terminal(Token::ID_("try")),
+                                          new Terminal(Token::LPAREN),
+                                          new ParsedTerm("exp", Symbols{
+                                              new ParsedTerm("exp", Symbols{
+                                                  new ParsedTerm("lvalue", Symbols{
+                                                      new Terminal(Token::ID_("c")),
+                                                  }),
+                                              }),
+                                              new Terminal(Token::PLUS),
+                                              new ParsedTerm("exp", Symbols{
+                                                  new Terminal(Token::INT_(1)),
+                                              }),
+                                          }),
+                                          new Terminal(Token::RPAREN),
+                                      }),
+                                      new Terminal(Token::SEMICOLON),
+                                      new ParsedTerm("exp", Symbols{
+                                          new ParsedTerm("lvalue", Symbols{
+                                              new Terminal(Token::ID_("row")),
+                                              new Terminal(Token::LBRACK),
+                                              new ParsedTerm("exp", Symbols{
+                                                  new ParsedTerm("lvalue", Symbols{
+                                                      new Terminal(Token::ID_("r")),
+                                                  }),
+                                              }),
+                                              new Terminal(Token::RBRACK),
+                                          }),
+                                          new Terminal(Token::ASSIGN),
+                                          new ParsedTerm("exp", Symbols{
+                                              new Terminal(Token::INT_(0)),
+                                          }),
+                                      }),
+                                      new Terminal(Token::SEMICOLON),
+                                      new ParsedTerm("exp", Symbols{
+                                          new ParsedTerm("lvalue", Symbols{
+                                              new Terminal(Token::ID_("diag1")),
+                                              new Terminal(Token::LBRACK),
+                                              new ParsedTerm("exp", Symbols{
+                                                  new ParsedTerm("exp", Symbols{
+                                                      new ParsedTerm("lvalue", Symbols{
+                                                          new Terminal(Token::ID_("r")),
+                                                      }),
+                                                  }),
+                                                  new Terminal(Token::PLUS),
+                                                  new ParsedTerm("exp", Symbols{
+                                                      new ParsedTerm("lvalue", Symbols{
+                                                          new Terminal(Token::ID_("c")),
+                                                      }),
+                                                  }),
+                                              }),
+                                              new Terminal(Token::RBRACK),
+                                          }),
+                                          new Terminal(Token::ASSIGN),
+                                          new ParsedTerm("exp", Symbols{
+                                              new Terminal(Token::INT_(0)),
+                                          }),
+                                      }),
+                                      new Terminal(Token::SEMICOLON),
+                                      new ParsedTerm("exp", Symbols{
+                                          new ParsedTerm("lvalue", Symbols{
+                                              new Terminal(Token::ID_("diag2")),
+                                              new Terminal(Token::LBRACK),
+                                              new ParsedTerm("exp", Symbols{
+                                                  new ParsedTerm("exp", Symbols{
+                                                      new ParsedTerm("exp", Symbols{
+                                                          new ParsedTerm("lvalue", Symbols{
+                                                              new Terminal(Token::ID_("r")),
+                                                          }),
+                                                      }),
+                                                      new Terminal(Token::PLUS),
+                                                      new ParsedTerm("exp", Symbols{
+                                                          new Terminal(Token::INT_(7)),
+                                                      }),
+                                                  }),
+                                                  new Terminal(Token::MINUS),
+                                                  new ParsedTerm("exp", Symbols{
+                                                      new ParsedTerm("lvalue", Symbols{
+                                                          new Terminal(Token::ID_("c")),
+                                                      }),
+                                                  }),
+                                              }),
+                                              new Terminal(Token::RBRACK),
+                                          }),
+                                          new Terminal(Token::ASSIGN),
+                                          new ParsedTerm("exp", Symbols{
+                                              new Terminal(Token::INT_(0)),
+                                          }),
+                                      }),
+                                  }),
+                                  new Terminal(Token::RPAREN),
+                              }),
+                          }),
+                      }),
+                  }),
+              }),
+          }),
+          new Terminal(Token::IN),
+          new ParsedTerm("exps", Symbols{
+              new ParsedTerm("exp", Symbols{
+                  new Terminal(Token::ID_("try")),
+                  new Terminal(Token::LPAREN),
+                  new ParsedTerm("exp", Symbols{
+                      new Terminal(Token::INT_(0)),
+                  }),
+                  new Terminal(Token::RPAREN),
+              }),
+          }),
+          new Terminal(Token::END),
+      }),
+  });
+  EXPECT_EQ(*parseTree, *expectedParseTree);
+}
+
+TEST(parser_test, test_delanging_else) {
+  using namespace tiger::lex;
+  using namespace tiger::syntax;
+
+  string program(R"(
+    if 10 > 5 then
+      if 2 > 1 then
+        3
+      else
+        2
+  )");
+  Lexer lexer(program);
+  auto parser = SLRParser::newInstance(Grammar::tigerGrammar());
+  unique_ptr<ParsedTerm> parseTree = parser->parse(lexer);
+#ifndef NDEBUG
+  std::clog << *parseTree;
+#endif
+  using Symbols = deque<Symbol*>;
+  auto expectedParseTree = std::make_unique<ParsedTerm>("program", Symbols{
+      new ParsedTerm("exp", Symbols{
+          new Terminal(Token::IF),
+          new ParsedTerm("exp", Symbols{
+              new ParsedTerm("exp", Symbols{
+                  new Terminal(Token::INT_(10)),
+              }),
+              new Terminal(Token::GT),
+              new ParsedTerm("exp", Symbols{
+                  new Terminal(Token::INT_(5)),
+              }),
+          }),
+          new Terminal(Token::THEN),
+          new ParsedTerm("exp", Symbols{
+              new Terminal(Token::IF),
+              new ParsedTerm("exp", Symbols{
+                  new ParsedTerm("exp", Symbols{
+                      new Terminal(Token::INT_(2)),
+                  }),
+                  new Terminal(Token::GT),
+                  new ParsedTerm("exp", Symbols{
+                      new Terminal(Token::INT_(1)),
+                  }),
+              }),
+              new Terminal(Token::THEN),
+              new ParsedTerm("exp", Symbols{
+                  new Terminal(Token::INT_(3)),
+              }),
+              new Terminal(Token::ELSE),
+              new ParsedTerm("exp", Symbols{
+                  new Terminal(Token::INT_(2)),
+              }),
+          }),
+      }),
+  });
+  EXPECT_EQ(*parseTree, *expectedParseTree);
 }

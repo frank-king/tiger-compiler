@@ -22,7 +22,7 @@ void AssignStmt::print(std::ostream& os) const noexcept {
 }
 
 void PrintStmt::print(std::ostream& os) const noexcept {
-  os << "print(";
+  os << "indentedPrint(";
   exprs_->print(os);
   os << ")";
 }

@@ -31,8 +31,8 @@ TEST(slp_test, stmt_test) {
   std::string program_str = std::move(ss.str());
   const char *expected_program_str =
       "a := 5 + 3;\n"
-      "b := (print(a, a - 1), 10 * a);\n"
-      "print(b)";
+      "b := (indentedPrint(a, a - 1), 10 * a);\n"
+      "indentedPrint(b)";
   EXPECT_EQ(program_str, expected_program_str);
 }
 
