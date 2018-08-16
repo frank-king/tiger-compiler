@@ -7,7 +7,7 @@ find_package(Threads REQUIRED)
 
 enable_testing()
 set(TEST_SOURCES
-        test_slp.cpp
+        test_syntax.cpp
         test_lexer.cpp
         test_parser.cpp
         )

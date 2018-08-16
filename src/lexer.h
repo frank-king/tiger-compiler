@@ -18,9 +18,12 @@ using std::unique_ptr;
 using char_t = char;
 
 namespace tiger::lex {
+
+struct Position { long line, col; };
+
 class Token {
 public:
-  enum Type {
+  enum Kind {
     ID, STRING, INT, COMMA, COLON, SEMICOLON,
     LPAREN, RPAREN, LBRACK, RBRACK, LBRACE, RBRACE,
     DOT, PLUS, MINUS, TIMES, DIVIDE, EQ, NEQ,
@@ -31,8 +34,8 @@ public:
     EOF_TOK, EMPTY
   };
 
-  Token(Type type) noexcept : type_(type) {
-    switch (type_) {
+  Token(Kind kind) noexcept : kind_(kind) {
+    switch (kind_) {
     case ID: case STRING: new (&strValue_) string(); break;
     case INT: intValue_ = 0; break;
     default: break;
@@ -40,15 +43,23 @@ public:
   }
   Token(const Token& other) { *this = other; }
   Token(Token&& other) noexcept { *this = std::move(other); }
+  Token(const Token& other, const Position& pos) {
+    *this = other;
+    pos_ = pos;
+  }
+  Token(Token&& other, Position pos) noexcept {
+    *this = std::move(other);
+    pos_ = pos;
+  }
   ~Token() noexcept {
-    switch (type_) {
+    switch (kind_) {
     case ID: case STRING: strValue_.~string(); break;
     default: break;
     }
   }
 
   Token& operator=(const Token& other) {
-    switch (type_ = other.type_) {
+    switch (kind_ = other.kind_) {
     case ID: case STRING: new (&strValue_) string(other.strValue_); break;
     case INT: intValue_ = other.intValue_; break;
     default: break;
@@ -56,7 +67,7 @@ public:
     return *this;
   }
   Token& operator=(Token&& other) noexcept {
-    switch (type_ = other.type_) {
+    switch (kind_ = other.kind_) {
     case ID: case STRING: new (&strValue_) string(std::move(other.strValue_)); break;
     case INT: intValue_ = other.intValue_; break;
     default: break;
@@ -64,6 +75,10 @@ public:
     return *this;
   }
 
+  const Position& position() const noexcept { return pos_; }
+
+  constexpr int intValue() const noexcept { return intValue_; }
+  const string& strValue() const noexcept { return strValue_; }
 
   static Token INT_(int value) noexcept { return Token(INT, value); }
   static Token ID_(string value) { return Token(ID, std::move(value)); }
@@ -71,13 +86,13 @@ public:
   static Token STRING_(string value) { return Token(STRING, std::move(value)); }
   static Token STRING_(const char_t *value) { return Token(STRING, value); }
 
-  constexpr const char_t *name() const noexcept { return NAMES[type_]; }
-  Type type() const noexcept { return type_; }
-  bool is(Type type) const noexcept { return type_ == type; }
+  constexpr const char_t *name() const noexcept { return NAMES[kind_]; }
+  Kind kind() const noexcept { return kind_; }
+  bool is(Kind kind) const noexcept { return kind_ == kind; }
   bool operator==(const Token &rhs) const noexcept {
-    if (type_ != rhs.type_)
+    if (kind_ != rhs.kind_)
       return false;
-    switch (type_) {
+    switch (kind_) {
     case ID: case STRING: return strValue_ == rhs.strValue_;
     case INT: return intValue_ == rhs.intValue_;
     default: return true;
@@ -86,7 +101,7 @@ public:
 
   friend std::ostream& operator<<(std::ostream& os, const Token& token) {
     os << token.name();
-    switch (token.type_) {
+    switch (token.kind_) {
     case ID: os << "(\"" << token.strValue_ << "\")"; break;
     case INT: os << "(" << token.intValue_ << ")"; break;
     case STRING:
@@ -113,11 +128,11 @@ public:
     return os;
   }
 
-  static constexpr std::pair<const char_t*, Token::Type> KEYWORDS[] = {
+  static constexpr std::pair<const char_t*, Token::Kind> KEYWORDS[] = {
       {"array", ARRAY}, {"if", IF}, {"then", THEN}, {"else", ELSE}, {"while", WHILE},
       {"for", FOR}, {"to", TO}, {"do", DO}, {"let", LET}, {"in", IN}, {"end", END},
       {"of", OF}, {"break", BREAK}, {"nil", NIL}, {"function", FUNCTION}, {"var", VAR},
-      {"type", TYPE},
+      {"kind", TYPE},
   };
 
 protected:
@@ -131,15 +146,17 @@ protected:
       // Special tokens used for the parser
       "EOF", "EMPTY",
   };
-  explicit constexpr Token(Type type, int value) noexcept : type_(type), intValue_(value) {}
-  explicit Token(Type type, string value) : type_(type), strValue_(std::move(value)) {}
-  explicit Token(Type type, const char_t *value) : type_(type), strValue_(value) {}
+  explicit constexpr Token(Kind kind, int value) noexcept
+      : kind_(kind), intValue_(value), pos_() {}
+  explicit Token(Kind kind, string value) : kind_(kind), strValue_(std::move(value)) {}
+  explicit Token(Kind kind, const char_t *value) : kind_(kind), strValue_(value) {}
 
-  Type type_;
+  Kind kind_;
   union {
     int intValue_;
     string strValue_;
   };
+  Position pos_;
 };
 
 class Lexer {
@@ -153,7 +170,6 @@ public:
   Token nextToken();
 
 protected:
-  // using std::istream::pos_type;
   unique_ptr<std::istream> input_;
   void eatNonTokens();
   int get() noexcept;
@@ -166,8 +182,7 @@ protected:
   Token processString();
   Token processSymbol();
 
-  // pos_type tok_beg_ = 0, tok_end_ = 0, cur_ = 0;
-  mutable long line_ = 1, col_ = 1;
+  mutable Position cur_;
 
 };
 } // namespace tiger::lex

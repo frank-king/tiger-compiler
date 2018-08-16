@@ -12,24 +12,24 @@ Token Lexer::nextToken() {
   if (eof())
     return Token::EOF_TOK;
 
-  // tok_beg_ = input_->tellg();
+  Position beg = cur_;
   if (auto ch = peek(); isalpha(ch)) {
     // Process the keywords or identifiers.
-    return processKeywordOrId();
+    return Token(processKeywordOrId(), beg);
   } else if (isdigit(ch)) {
     // Process the integer literals.
-    return processInt();
+    return Token(processInt(), beg);
   } else if (ch == '\"') {
     // Process the string literals;
-    return processString();
+    return Token(processString(), beg);
   } else {
     // Process the symbols.
-    return processSymbol();
+    return Token(processSymbol(), beg);
   }
 }
-int Lexer::get() noexcept { ++col_; return input_->get(); }
+int Lexer::get() noexcept { ++cur_.col; return input_->get(); }
 int Lexer::peek() const noexcept { return input_->peek(); }
-void Lexer::unget() noexcept { --col_; input_->unget(); }
+void Lexer::unget() noexcept { --cur_.col; input_->unget(); }
 
 void Lexer::eatNonTokens() {
   while (!input_->eof()) {
@@ -70,8 +70,8 @@ void Lexer::eatIfNewline(int &cur) {
     if (auto ch = peek(); ch != cur && (ch == '\n' || ch == '\r'))
       get();
     cur = peek();
-    ++line_;
-    col_ = 1;
+    ++cur_.line;
+    cur_.col = 1;
   }
 }
 
@@ -97,9 +97,9 @@ Token Lexer::processKeywordOrId() {
   if (!eof())
     unget();
   string&& value = buf.str();
-  for (const auto& [name, type] : Token::KEYWORDS)
+  for (const auto& [name, kind] : Token::KEYWORDS)
     if (value == name)
-      return Token(type);
+      return Token(kind);
   return Token::ID_(std::move(value));
 }
 

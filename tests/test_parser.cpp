@@ -8,7 +8,7 @@
 
 TEST(parser_test, test_empty_productions) {
   using namespace tiger::lex;
-  using namespace tiger::syntax;
+  using namespace tiger::grammar;
   Grammar::Builder g;
   g
       .prod(g.nonterm("tuple"), {g.term(Token::LPAREN), g.term(Token::RPAREN),})
@@ -26,28 +26,28 @@ TEST(parser_test, test_empty_productions) {
   auto parser = SLRParser::newInstance(std::move(grammar));
 
   auto parseTree = parser->parse(lexer);
-  auto expectedParseTree = std::make_unique<ParsedTerm>("tuple", deque<Symbol*>{
+  auto expectedParseTree = std::make_unique<ParsedTerm>("tuple", deque<GrammarSymbol*>{
       new Terminal(Token::LPAREN),
-      new ParsedTerm("item", deque<Symbol *>{
+      new ParsedTerm("item", deque<GrammarSymbol *>{
           new Terminal(Token::ID_("a")),
       }),
       new Terminal(Token::COMMA),
-      new ParsedTerm("item", deque<Symbol *>{
+      new ParsedTerm("item", deque<GrammarSymbol *>{
           new Terminal(Token::ID_("b")),
       }),
       new Terminal(Token::COMMA),
-      new ParsedTerm("item", deque<Symbol *>{
-          new ParsedTerm("tuple", deque<Symbol *>{
+      new ParsedTerm("item", deque<GrammarSymbol *>{
+          new ParsedTerm("tuple", deque<GrammarSymbol *>{
               new Terminal(Token::LPAREN),
-              new ParsedTerm("item", deque<Symbol *>{
+              new ParsedTerm("item", deque<GrammarSymbol *>{
                   new Terminal(Token::ID_("c")),
               }),
               new Terminal(Token::RPAREN),
           }),
       }),
       new Terminal(Token::COMMA),
-      new ParsedTerm("item", deque<Symbol *>{
-          new ParsedTerm("tuple", deque<Symbol *>{
+      new ParsedTerm("item", deque<GrammarSymbol *>{
+          new ParsedTerm("tuple", deque<GrammarSymbol *>{
               new Terminal(Token::LPAREN),
               new Terminal(Token::RPAREN),
           }),
@@ -60,10 +60,11 @@ TEST(parser_test, test_empty_productions) {
 
 TEST(parser_test, test_ambiguious_grammar) {
   using namespace tiger::lex;
-  using namespace tiger::syntax;
+  using namespace tiger::grammar;
   Grammar::Builder g;
-  g.prod(g.nonterm("E"), {g.nonterm("E"), g.term(Token::TIMES), g.nonterm("E"),}, {Production::LEFT, Production::FIRST})
-      .prod(g.nonterm("E"), {g.nonterm("E"), g.term(Token::PLUS), g.nonterm("E"),}, {Production::LEFT, Production::SECOND})
+  g
+      .prod(g.nonterm("E"), {g.nonterm("E"), g.term(Token::TIMES), g.nonterm("E"),}, Production::Attribute(Production::LEFT, Production::FIRST))
+      .prod(g.nonterm("E"), {g.nonterm("E"), g.term(Token::PLUS), g.nonterm("E"),}, Production::Attribute(Production::LEFT, Production::SECOND))
       .prod(g.nonterm("E"), {g.term(Token::LPAREN), g.nonterm("E"), g.term(Token::RPAREN),})
       .prod(g.nonterm("E"), {g.term(Token::ID),})
       .startAt(g.nonterm("E"));
@@ -75,26 +76,26 @@ TEST(parser_test, test_ambiguious_grammar) {
   auto parser = SLRParser::newInstance(std::move(grammar));
 
   auto parseTree = parser->parse(lexer);
-  auto expectedParseTree = std::make_unique<ParsedTerm>("E", deque<Symbol*>{
-      new ParsedTerm("E", deque<Symbol*>{
+  auto expectedParseTree = std::make_unique<ParsedTerm>("E", deque<GrammarSymbol*>{
+      new ParsedTerm("E", deque<GrammarSymbol*>{
           new Terminal(Token::LPAREN),
-          new ParsedTerm("E", deque<Symbol *>{
-              new ParsedTerm("E", deque<Symbol *>{
-                  new ParsedTerm("E", deque<Symbol *>{
+          new ParsedTerm("E", deque<GrammarSymbol *>{
+              new ParsedTerm("E", deque<GrammarSymbol *>{
+                  new ParsedTerm("E", deque<GrammarSymbol *>{
                       new Terminal(Token::ID_("a")),
                   }),
                   new Terminal(Token::TIMES),
-                  new ParsedTerm("E", deque<Symbol *>{
+                  new ParsedTerm("E", deque<GrammarSymbol *>{
                       new Terminal(Token::ID_("b")),
                   }),
               }),
               new Terminal(Token::PLUS),
-              new ParsedTerm("E", deque<Symbol *>{
-                  new ParsedTerm("E", deque<Symbol *>{
+              new ParsedTerm("E", deque<GrammarSymbol *>{
+                  new ParsedTerm("E", deque<GrammarSymbol *>{
                       new Terminal(Token::ID_("c")),
                   }),
                   new Terminal(Token::TIMES),
-                  new ParsedTerm("E", deque<Symbol *>{
+                  new ParsedTerm("E", deque<GrammarSymbol *>{
                       new Terminal(Token::ID_("d")),
                   }),
               }),
@@ -102,7 +103,7 @@ TEST(parser_test, test_ambiguious_grammar) {
           new Terminal(Token::RPAREN),
       }),
       new Terminal(Token::TIMES),
-      new ParsedTerm("E", deque<Symbol *>{
+      new ParsedTerm("E", deque<GrammarSymbol *>{
           new Terminal(Token::ID_("e")),
       }),
   });
@@ -112,7 +113,7 @@ TEST(parser_test, test_ambiguious_grammar) {
 
 TEST(parser_test, test_simple_grammar) {
   using namespace tiger::lex;
-  using namespace tiger::syntax;
+  using namespace tiger::grammar;
 
   Grammar::Builder g;
   g.prod(g.nonterm("E"), {g.nonterm("E"), g.term(Token::PLUS), g.nonterm("T"),})
@@ -193,23 +194,23 @@ TEST(parser_test, test_simple_grammar) {
 
 
   auto parseTree = parser->parse(lexer);
-  auto expectedParseTree = std::make_unique<ParsedTerm>("E", deque<Symbol*>{
-      new ParsedTerm("E", deque<Symbol*>{
-          new ParsedTerm("T", deque<Symbol*>{
-              new ParsedTerm("T", deque<Symbol*>{
-                  new ParsedTerm("F", deque<Symbol*>{
+  auto expectedParseTree = std::make_unique<ParsedTerm>("E", deque<GrammarSymbol*>{
+      new ParsedTerm("E", deque<GrammarSymbol*>{
+          new ParsedTerm("T", deque<GrammarSymbol*>{
+              new ParsedTerm("T", deque<GrammarSymbol*>{
+                  new ParsedTerm("F", deque<GrammarSymbol*>{
                       new Terminal(Token::ID_("a")),
                   }),
               }),
               new Terminal(Token::TIMES),
-              new ParsedTerm("F", deque<Symbol*>{
+              new ParsedTerm("F", deque<GrammarSymbol*>{
                   new Terminal(Token::ID_("b")),
               }),
           }),
       }),
       new Terminal(Token::PLUS),
-      new ParsedTerm("T", deque<Symbol*>{
-          new ParsedTerm("F", deque<Symbol*>{
+      new ParsedTerm("T", deque<GrammarSymbol*>{
+          new ParsedTerm("F", deque<GrammarSymbol*>{
               new Terminal(Token::ID_("c")),
           }),
       }),
@@ -219,7 +220,7 @@ TEST(parser_test, test_simple_grammar) {
 }
 
 TEST(parser_test, test_grammar) {
-  using namespace tiger::syntax;
+  using namespace tiger::grammar;
 
   auto parser = SLRParser::newInstance(Grammar::tigerGrammar());
   const Grammar *grammar = parser->grammar();
@@ -263,7 +264,6 @@ TEST(parser_test, test_grammar) {
   // terms.emplace_back(new Terminal(Token::NEW));
   terms.emplace_back(new Terminal(Token::LPAREN));
   terms.emplace_back(new Terminal(Token::RPAREN));
-  terms.emplace_back(new Terminal(Token::DOT));
   terms.emplace_back(new Terminal(Token::MINUS));
   terms.emplace_back(new Terminal(Token::ASSIGN));
   terms.emplace_back(new Terminal(Token::IF));
@@ -277,6 +277,7 @@ TEST(parser_test, test_grammar) {
   terms.emplace_back(new Terminal(Token::LET));
   terms.emplace_back(new Terminal(Token::IN));
   terms.emplace_back(new Terminal(Token::END));
+  terms.emplace_back(new Terminal(Token::DOT));
   terms.emplace_back(new Terminal(Token::SEMICOLON));
   terms.emplace_back(new Terminal(Token::TYPE));
   // terms.emplace_back(new Terminal(Token::CLASS));
@@ -316,14 +317,14 @@ TEST(parser_test, test_grammar) {
 
 TEST(parser_test, test_parser) {
   using namespace tiger::lex;
-  using namespace tiger::syntax;
+  using namespace tiger::grammar;
 
   string program(R"(
     /* A program to solve the 8-queens problem */
     let
       var N := 8
 
-      type intArray = array of int
+      kind intArray = array of int
 
       var row := intArray [ N ] of 0
       var col := intArray [ N ] of 0
@@ -354,7 +355,7 @@ TEST(parser_test, test_parser) {
 #ifndef NDEBUG
   std::clog << *parseTree;
 #endif
-  using Symbols = deque<Symbol*>;
+  using Symbols = deque<GrammarSymbol*>;
   auto expectedParseTree = std::make_unique<ParsedTerm>("program", Symbols{
       new ParsedTerm("exp", Symbols{
           new Terminal(Token::LET),
@@ -495,6 +496,7 @@ TEST(parser_test, test_parser) {
                   new Terminal(Token::FUNCTION),
                   new Terminal(Token::ID_("printboard")),
                   new Terminal(Token::LPAREN),
+                  new ParsedTerm("tyfields", Symbols{}),
                   new Terminal(Token::RPAREN),
                   new Terminal(Token::EQ),
                   new ParsedTerm("exp", Symbols{
@@ -955,7 +957,7 @@ TEST(parser_test, test_parser) {
 
 TEST(parser_test, test_delanging_else) {
   using namespace tiger::lex;
-  using namespace tiger::syntax;
+  using namespace tiger::grammar;
 
   string program(R"(
     if 10 > 5 then
@@ -970,7 +972,7 @@ TEST(parser_test, test_delanging_else) {
 #ifndef NDEBUG
   std::clog << *parseTree;
 #endif
-  using Symbols = deque<Symbol*>;
+  using Symbols = deque<GrammarSymbol*>;
   auto expectedParseTree = std::make_unique<ParsedTerm>("program", Symbols{
       new ParsedTerm("exp", Symbols{
           new Terminal(Token::IF),

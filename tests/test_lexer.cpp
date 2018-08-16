@@ -12,7 +12,7 @@ TEST(lexer_test, lexer_test) {
     let
       var N := 8
 
-      type intArray = array of int
+      kind intArray = array of int
 
       var row := intArray [ N ] of 0
       var col := intArray [ N ] of 0

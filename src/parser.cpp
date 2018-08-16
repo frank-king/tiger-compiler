@@ -9,12 +9,12 @@
 #include <iostream>
 #include "parser.h"
 
-namespace tiger::syntax {
+namespace tiger::grammar {
 
 Grammar::Grammar(vector<unique_ptr<Terminal>>&& terms,
                  vector<unique_ptr<NonTerminal>>&& nonterms,
                  vector<unique_ptr<Production>>&& prods,
-                 unordered_map<Token::Type, Terminal*> termTypeHash,
+                 unordered_map<Token::Kind, Terminal*> termTypeHash,
                  NonTerminal *aug,
                  Terminal *eof) noexcept
     : terms_(std::move(terms)),
@@ -230,11 +230,11 @@ Grammar Grammar::Builder::build() noexcept {
 }
 
 Terminal *Grammar::Builder::term(const Token& token) {
-  if (auto iter = termHash_.find(token.type()); iter != termHash_.end()) {
+  if (auto iter = termHash_.find(token.kind()); iter != termHash_.end()) {
     return iter->second;
   } else {
     return termHash_.emplace(
-            token.type(), terms_.emplace_back(new Terminal(token)).get())
+            token.kind(), terms_.emplace_back(new Terminal(token)).get())
         .first->second;
   }
 }
@@ -351,7 +351,7 @@ void SLRParser::generateParseTable() {
       prod = nullptr;
     for (auto gItem : *states_[iState]) {
       auto lr0Item = dynamic_cast<LR0Item*>(gItem);
-      if (Symbol *nextSym = lr0Item->nextSym()) {
+      if (GrammarSymbol *nextSym = lr0Item->nextSym()) {
         LR0Item *nextItem = item(lr0Item->production(), lr0Item->index() + 1);
         if (nextSym->isNonTerminal()) {
           auto nextNonterm = dynamic_cast<NonTerminal *>(nextSym);
@@ -432,18 +432,8 @@ void SLRParser::generateParseTable() {
         action = Action::ERROR;
 }
 
-template <typename U, typename T>
-unique_ptr<U> dynamic_unique_cast(unique_ptr<T>&& base) {
-  if (!base)
-    return nullptr;
-  else {
-    auto derived = dynamic_cast<U *>(base.release());
-    return unique_ptr<U>(derived);
-  }
-};
-
 unique_ptr<ParsedTerm> SLRParser::parse(lex::Lexer& lexer) {
-  struct Node { size_t iState; unique_ptr<Symbol> sym; };
+  struct Node { size_t iState; unique_ptr<GrammarSymbol> sym; };
   std::stack<Node> stack;
   stack.push({0, nullptr});
   Token token(Token::EOF_TOK);
@@ -454,9 +444,9 @@ unique_ptr<ParsedTerm> SLRParser::parse(lex::Lexer& lexer) {
       advance = false;
       token = lexer.nextToken();
     }
-    size_t iTerm = grammar_->indexOfToken(token.type());
+    size_t iTerm = grammar_->indexOfToken(token.kind());
     Action action = parseTable_[iState][iTerm];
-    switch (action.type) {
+    switch (action.kind) {
     // For action SHIFT(a, I), fetch the next token a, and push it onto the stack
     // with state I.
     case Action::SHIFT:
@@ -469,20 +459,19 @@ unique_ptr<ParsedTerm> SLRParser::parse(lex::Lexer& lexer) {
     // before A has been pushed.
     case Action::REDUCE: {
       const Production *prod = grammar_->productions()[action.useProd].get();
-      auto parsedTerm = std::make_unique<ParsedTerm>(*prod->head());
+      auto parsedTerm = std::make_unique<ParsedTerm>(*prod->head(), prod);
       for (size_t i = 0; i < prod->size(); ++i) {
         if (auto sym = std::move(stack.top().sym); sym->isTerminal()) {
           parsedTerm->addChildFront(std::move(sym));
-        } else if (auto nonterm = dynamic_cast<ParsedTerm*>(sym.release());
-            !nonterm->empty()) {
-          auto uptr = unique_ptr<ParsedTerm>(nonterm);
+        } else {
+          auto nonterm = dynamic_unique_cast<ParsedTerm>(std::move(sym));
           if (nonterm->isClosure()) {
             auto&& children = std::move(*nonterm).children();
             for (auto it = std::move(children).rbegin();
                  it != std::move(children).rend(); ++it)
               parsedTerm->addChildFront(std::move(*it));
           } else {
-            parsedTerm->addChildFront(std::move(uptr));
+            parsedTerm->addChildFront(std::move(nonterm));
           }
         }
         stack.pop();
@@ -506,136 +495,417 @@ unique_ptr<ParsedTerm> SLRParser::parse(lex::Lexer& lexer) {
 
 unique_ptr<const Grammar> Grammar::tigerGrammar() {
   using ProdType = Production;
+  using namespace syntax;
+  auto singleTerm =
+      [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+        return term->get<ParsedTerm>(0)->abstract(absSyntax);
+      };
+  auto opExpr =
+      [](const ParsedTerm *term, AbstractSyntax& absSyntax) -> Expr* {
+        const auto& pos = term->position();
+        auto lhs = term->get<ParsedTerm>(0)->abstract<Expr>(absSyntax);
+        auto op = term->get<Terminal>(1)->token().kind();
+        auto rhs = term->get<ParsedTerm>(2)->abstract<Expr>(absSyntax);
+        switch (op) {
+        case Token::TIMES: return absSyntax.elem<OpExpr>(pos, OpExpr::TIMES, lhs, rhs);
+        case Token::DIVIDE: return absSyntax.elem<OpExpr>(pos, OpExpr::DIVIDE, lhs, rhs);
+        case Token::PLUS: return absSyntax.elem<OpExpr>(pos, OpExpr::PLUS, lhs, rhs);
+        case Token::MINUS: return absSyntax.elem<OpExpr>(pos, OpExpr::MINUS, lhs, rhs);
+        case Token::EQ: return absSyntax.elem<OpExpr>(pos, OpExpr::EQ, lhs, rhs);
+        case Token::NEQ: return absSyntax.elem<OpExpr>(pos, OpExpr::NEQ, lhs, rhs);
+        case Token::GT: return absSyntax.elem<OpExpr>(pos, OpExpr::GT, lhs, rhs);
+        case Token::LT: return absSyntax.elem<OpExpr>(pos, OpExpr::LT, lhs, rhs);
+        case Token::GE: return absSyntax.elem<OpExpr>(pos, OpExpr::GE, lhs, rhs);
+        case Token::LE: return absSyntax.elem<OpExpr>(pos, OpExpr::LE, lhs, rhs);
+        case Token::AND:
+          return absSyntax.elem<IfExpr>(
+              pos, lhs, rhs, absSyntax.elem<IntExpr>(Position(), 0));
+        case Token::OR:
+          return absSyntax.elem<IfExpr>(
+              pos, lhs, absSyntax.elem<IntExpr>(Position(), 1), rhs);
+        default:
+          return nullptr;
+        }
+      };
   Grammar::Builder g;
-  g.prod(g.nonterm("program"), {g.nonterm("exp"),})
-      .prod(g.nonterm("program"), {g.nonterm("decs"),})
-          // Literals.
-      .prod(g.nonterm("exp"), {g.term(Token::NIL)})
-      .prod(g.nonterm("exp"), {g.term(Token::INT)})
-      .prod(g.nonterm("exp"), {g.term(Token::STRING)})
-          // Array and record creations.
-      // .prod(g.nonterm("exp"), {g.nonterm("type_id"), g.term(Token::LBRACK), g.nonterm("exp"), g.term(Token::RBRACK), g.term(Token::OF), g.nonterm("exp")})
-      // .prod(g.nonterm("exp"), {g.nonterm("type_id"), g.term(Token::LBRACE), g.term(Token::RBRACE),})
-      // .prod(g.nonterm("exp"), {g.nonterm("type_id"), g.term(Token::LBRACE), g.term(Token::ID), g.term(Token::EQ), g.nonterm("exp"), g.closure("closure1"), g.term(Token::RBRACE),})
+  g
+      .prod(g.nonterm("program"), {g.nonterm("exp"),}, singleTerm)
+      .prod(g.nonterm("program"), {g.nonterm("decs"),}, singleTerm)
 
-      .prod(g.nonterm("exp"), {g.term(Token::ID), g.term(Token::LBRACK), g.nonterm("exp"), g.term(Token::RBRACK), g.term(Token::OF), g.nonterm("exp")})
-      .prod(g.nonterm("exp"), {g.term(Token::ID), g.term(Token::LBRACE), g.term(Token::RBRACE),})
-      .prod(g.nonterm("exp"), {g.term(Token::ID), g.term(Token::LBRACE), g.term(Token::ID), g.term(Token::EQ), g.nonterm("exp"), g.closure("closure1"), g.term(Token::RBRACE),})
+          // Literals.
+      .prod(g.nonterm("exp"), {g.term(Token::NIL)},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              return absSyntax.elem<NilExpr>(term->position());
+            })
+      .prod(g.nonterm("exp"), {g.term(Token::INT)},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              auto intt = term->get<Terminal>(0);
+              return absSyntax.elem<IntExpr>(
+                  intt->position(), intt->token().intValue());
+            })
+      .prod(g.nonterm("exp"), {g.term(Token::STRING)},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              auto str = term->get<Terminal>(0);
+              return absSyntax.elem<StrExpr>(
+                  str->position(), str->token().strValue());
+            })
+
+          // Array and record creations.
+      .prod(g.nonterm("exp"), {g.term(Token::ID), g.term(Token::LBRACK), g.nonterm("exp"), g.term(Token::RBRACK), g.term(Token::OF), g.nonterm("exp"),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              auto type_name = term->get<Terminal>(0);
+              auto size = term->get<ParsedTerm>(2);
+              auto init = term->get<ParsedTerm>(5);
+              return absSyntax.elem<ArrayExpr>(
+                  term->position(), type_name->token().strValue(),
+                  size->abstract<Expr>(absSyntax),
+                  init->abstract<Expr>(absSyntax));
+            })
+      .prod(g.nonterm("exp"), {g.term(Token::ID), g.term(Token::LBRACE), g.term(Token::RBRACE),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              auto type_name = term->get<Terminal>(0);
+              return absSyntax.elem<RecordExpr>(
+                  term->position(), type_name->token().strValue(), vector<ValueField*>());
+            })
+      .prod(g.nonterm("exp"), {g.term(Token::ID), g.term(Token::LBRACE), g.term(Token::ID), g.term(Token::EQ), g.nonterm("exp"), g.closure("closure1"), g.term(Token::RBRACE),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              auto type_name = term->get<Terminal>(0);
+              vector<ValueField*> fields;
+              for (size_t i = 2; i + 2 < term->children().size(); i += 3) {
+                auto id = term->get<Terminal>(i);
+                auto expr = term->get<ParsedTerm>(i + 2);
+                fields.emplace_back(absSyntax.elem<ValueField>(
+                    id->position(),
+                    id->token().strValue(),
+                    expr->abstract<Expr>(absSyntax)));
+              }
+              return absSyntax.elem<RecordExpr>(
+                  term->position(), type_name->token().strValue(),
+                  std::move(fields));
+            })
       .prod(g.closure("closure1"), {})
       .prod(g.closure("closure1"), {g.term(Token::COMMA), g.term(Token::ID), g.term(Token::EQ), g.nonterm("exp"), g.closure("closure1"),})
           // Object creation.
-      // // .prod(g.nonterm("exp"), {g.term(Token::NEW), g.nonterm("type_id"),})
-      // .prod(g.nonterm("exp"), {g.term(Token::NEW), g.term(Token::ID),})
+          // // .prod(g.nonterm("exp"), {g.term(Token::NEW), g.nonterm("type_id"),})
+          // .prod(g.nonterm("exp"), {g.term(Token::NEW), g.term(Token::ID),})
 
           // Variables, field, elements of an array.
-      .prod(g.nonterm("exp"), {g.nonterm("lvalue"),})
+      .prod(g.nonterm("exp"), {g.nonterm("lvalue"),}, singleTerm)
 
           // Function call
-      .prod(g.nonterm("exp"), {g.term(Token::ID), g.term(Token::LPAREN), g.term(Token::RPAREN),})
-      .prod(g.nonterm("exp"), {g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("exp"), g.closure("closure2"), g.term(Token::RPAREN),})
+      .prod(g.nonterm("exp"), {g.term(Token::ID), g.term(Token::LPAREN), g.term(Token::RPAREN),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              auto funcname = term->get<Terminal>(0);
+              return absSyntax.elem<CallExpr>(
+                  term->position(), funcname->token().strValue(), vector<Expr*>());
+            })
+      .prod(g.nonterm("exp"), {g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("exp"), g.closure("closure2"), g.term(Token::RPAREN),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              auto funcname = term->get<Terminal>(0);
+              vector<Expr*> exprs;
+              for (size_t i = 2; i + 1 < term->children().size(); i += 2) {
+                auto expr = term->get<ParsedTerm>(i);
+                exprs.emplace_back(expr->abstract<Expr>(absSyntax));
+              }
+              return absSyntax.elem<CallExpr>(
+                  term->position(), funcname->token().strValue(),
+                  std::move(exprs));
+            })
+
       .prod(g.closure("closure2"), {})
       .prod(g.closure("closure2"), {g.term(Token::COMMA), g.nonterm("exp"), g.closure("closure2"),})
 
           // Method call.
-      .prod(g.nonterm("exp"), {g.nonterm("lvalue"), g.term(Token::DOT), g.term(Token::ID), g.term(Token::LPAREN), g.term(Token::RPAREN),})
-      .prod(g.nonterm("exp"), {g.nonterm("lvalue"), g.term(Token::DOT), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("exp"), g.closure("closure2"), g.term(Token::RPAREN),})
+          // .prod(g.nonterm("exp"), {g.nonterm("lvalue"), g.term(Token::DOT), g.term(Token::ID), g.term(Token::LPAREN), g.term(Token::RPAREN),})
+          // .prod(g.nonterm("exp"), {g.nonterm("lvalue"), g.term(Token::DOT), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("exp"), g.closure("closure2"), g.term(Token::RPAREN),})
 
           // Operations.
-      .prod(g.nonterm("exp"), {g.term(Token::MINUS), g.nonterm("exp"),}, {Production::RIGHT, Production::PROTECTED})
-      .prod(g.nonterm("exp"), {g.term(Token::LPAREN), g.nonterm("exps"), g.term(Token::RPAREN),})
+      .prod(g.nonterm("exp"), {g.term(Token::MINUS), g.nonterm("exp"),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              auto expr = term->get<ParsedTerm>(1);
+              return absSyntax.elem<OpExpr>(
+                  term->position(),
+                  OpExpr::MINUS,
+                  absSyntax.elem<IntExpr>(term->position(), 0),
+                  expr->abstract<Expr>(absSyntax));
+            }, Production::Attribute(Production::RIGHT, Production::PROTECTED))
+      .prod(g.nonterm("exp"), {g.term(Token::LPAREN), g.nonterm("exps"), g.term(Token::RPAREN),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              return term->get<ParsedTerm>(1)->abstract(absSyntax);
+            })
 
           // Assigns.
-      .prod(g.nonterm("exp"), {g.nonterm("lvalue"), g.term(Token::ASSIGN), g.nonterm("exp"),})
+      .prod(g.nonterm("exp"), {g.nonterm("lvalue"), g.term(Token::ASSIGN), g.nonterm("exp"),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              auto var = term->get<ParsedTerm>(0);
+              auto expr = term->get<ParsedTerm>(2);
+              return absSyntax.elem<AssignExpr>(
+                  term->position(),
+                  var->abstract<VarExpr>(absSyntax),
+                  expr->abstract<Expr>(absSyntax));
+            })
 
           // Control structures.
-      .prod(g.nonterm("exp"), {g.term(Token::IF), g.nonterm("exp"), g.term(Token::THEN), g.nonterm("exp"),})
-      .prod(g.nonterm("exp"), {g.term(Token::IF), g.nonterm("exp"), g.term(Token::THEN), g.nonterm("exp"), g.term(Token::ELSE), g.nonterm("exp"),})
-      .prod(g.nonterm("exp"), {g.term(Token::WHILE), g.nonterm("exp"), g.term(Token::DO), g.nonterm("exp"),})
-      .prod(g.nonterm("exp"), {g.term(Token::FOR), g.term(Token::ID), g.term(Token::ASSIGN), g.nonterm("exp"), g.term(Token::TO), g.nonterm("exp"), g.term(Token::DO), g.nonterm("exp"),})
-      .prod(g.nonterm("exp"), {g.term(Token::BREAK),})
-      .prod(g.nonterm("exp"), {g.term(Token::LET), g.nonterm("decs"), g.term(Token::IN), g.nonterm("exps"), g.term(Token::END),})
+      .prod(g.nonterm("exp"), {g.term(Token::IF), g.nonterm("exp"), g.term(Token::THEN), g.nonterm("exp"),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              auto test = term->get<ParsedTerm>(1);
+              auto then = term->get<ParsedTerm>(3);
+              return absSyntax.elem<IfExpr>(
+                  term->position(),
+                  test->abstract<Expr>(absSyntax),
+                  then->abstract<Expr>(absSyntax),
+                  nullptr);
+            })
+      .prod(g.nonterm("exp"), {g.term(Token::IF), g.nonterm("exp"), g.term(Token::THEN), g.nonterm("exp"), g.term(Token::ELSE), g.nonterm("exp"),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              auto test = term->get<ParsedTerm>(1);
+              auto then = term->get<ParsedTerm>(3);
+              auto elsee = term->get<ParsedTerm>(5);
+              return absSyntax.elem<IfExpr>(
+                  term->position(),
+                  test->abstract<Expr>(absSyntax),
+                  then->abstract<Expr>(absSyntax),
+                  elsee->abstract<Expr>(absSyntax));
+            })
+      .prod(g.nonterm("exp"), {g.term(Token::WHILE), g.nonterm("exp"), g.term(Token::DO), g.nonterm("exp"),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              auto test = term->get<ParsedTerm>(1);
+              auto body = term->get<ParsedTerm>(3);
+              return absSyntax.elem<WhileExpr>(
+                  term->position(),
+                  test->abstract<Expr>(absSyntax),
+                  body->abstract<Expr>(absSyntax));
+            })
+      .prod(g.nonterm("exp"), {g.term(Token::FOR), g.term(Token::ID), g.term(Token::ASSIGN), g.nonterm("exp"), g.term(Token::TO), g.nonterm("exp"), g.term(Token::DO), g.nonterm("exp"),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              auto varname = term->get<Terminal>(1);
+              auto begin = term->get<ParsedTerm>(3);
+              auto end = term->get<ParsedTerm>(5);
+              auto body = term->get<ParsedTerm>(7);
+              return absSyntax.elem<ForExpr>(
+                  term->position(),
+                  varname->token().strValue(),
+                  begin->abstract<Expr>(absSyntax),
+                  end->abstract<Expr>(absSyntax),
+                  body->abstract<Expr>(absSyntax));
+            })
+      .prod(g.nonterm("exp"), {g.term(Token::BREAK),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              return absSyntax.elem<BreakExpr>(term->position());
+            })
+      .prod(g.nonterm("exp"), {g.term(Token::LET), g.nonterm("decs"), g.term(Token::IN), g.nonterm("exps"), g.term(Token::END),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              auto decls = term->get<ParsedTerm>(1);
+              auto exprs = term->get<ParsedTerm>(3);
+              return absSyntax.elem<LetExpr>(
+                  term->position(),
+                  decls->abstract<DeclList>(absSyntax),
+                  exprs->abstract<ExprList>(absSyntax));
+            })
 
-      .prod(g.nonterm("lvalue"), {g.term(Token::ID), g.closure("closure3"),})
+      .prod(g.nonterm("lvalue"), {g.term(Token::ID), g.closure("closure3"),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              VarExpr *var = absSyntax.elem<SimpleVar>(
+                  term->position(),
+                  term->get<Terminal>(0)->token().strValue());
+              for (size_t i = 1; i < term->children().size(); ) {
+                if (auto terminal = term->get<Terminal>(i);
+                    terminal->token().is(Token::DOT)) {
+                  auto field = term->get<Terminal>(i + 1);
+                  var = absSyntax.elem<FieldVar>(
+                      field->position(), var, field->token().strValue());
+                  i += 2;
+                } else if (terminal->token().is(Token::LBRACK)) {
+                  auto subscript = term->get<ParsedTerm>(i + 1);
+                  var = absSyntax.elem<SubscriptVar>(
+                      subscript->position(),
+                      var,
+                      subscript->abstract<Expr>(absSyntax));
+                  i += 3;
+                } else {
+                  break;
+                }
+              }
+              return var;
+            })
       .prod(g.closure("closure3"), {})
       .prod(g.closure("closure3"), {g.term(Token::DOT), g.term(Token::ID), g.closure("closure3")})
       .prod(g.closure("closure3"), {g.term(Token::LBRACK), g.nonterm("exp"), g.term(Token::RBRACK), g.closure("closure3"),})
 
-      .prod(g.nonterm("exps"), {})
-      .prod(g.nonterm("exps"), {g.nonterm("exp"), g.closure("closure4"),})
+      .prod(g.nonterm("exps"), {},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              return absSyntax.elem<ExprList>(term->position(), vector<Expr*>());
+            })
+      .prod(g.nonterm("exps"), {g.nonterm("exp"), g.closure("closure4"),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              vector<Expr*> exprs;
+              for (size_t i = 0;  i < term->children().size(); i += 2) {
+                auto expr = term->get<ParsedTerm>(i);
+                exprs.emplace_back(expr->abstract<Expr>(absSyntax));
+              }
+              return absSyntax.elem<ExprList>(term->position(), std::move(exprs));
+            })
       .prod(g.closure("closure4"), {})
       .prod(g.closure("closure4"), {g.term(Token::SEMICOLON), g.nonterm("exp"), g.closure("closure4"),})
 
-      .prod(g.nonterm("decs"), {g.closure("closure5"),})
+      .prod(g.nonterm("decs"), {g.closure("closure5"),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              vector<Declaration*> decls;
+              for (size_t i = 0; i < term->children().size(); ++i) {
+                auto decl = term->get<ParsedTerm>(i);
+                decls.emplace_back(decl->abstract<Declaration>(absSyntax));
+              }
+              return absSyntax.elem<DeclList>(term->position(), std::move(decls));
+            })
       .prod(g.closure("closure5"), {})
       .prod(g.closure("closure5"), {g.nonterm("dec"), g.closure("closure5"),})
 
           // Type declaration.
-      .prod(g.nonterm("dec"), {g.term(Token::TYPE), g.term(Token::ID), g.term(Token::EQ), g.nonterm("ty"),})
+      .prod(g.nonterm("dec"), {g.term(Token::TYPE), g.term(Token::ID), g.term(Token::EQ), g.nonterm("ty"),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              auto name = term->get<Terminal>(1);
+              auto typee = term->get<ParsedTerm>(3);
+              return absSyntax.elem<TypeDecl>(
+                  term->position(), name->token().strValue(), typee->abstract<Type>(absSyntax));
+            })
           // Class definition.
-      // .prod(g.nonterm("dec"), {g.term(Token::CLASS), g.term(Token::ID), g.term(Token::LBRACE), g.nonterm("classfields"), g.term(Token::RBRACE),})
-      // // .prod(g.nonterm("dec"), {g.term(Token::CLASS), g.term(Token::ID), g.term(Token::EXTENDS),  g.nonterm("type_id"), g.term(Token::LBRACE), g.nonterm("classfields"), g.term(Token::RBRACE),})
-      // .prod(g.nonterm("dec"), {g.term(Token::CLASS), g.term(Token::ID), g.term(Token::EXTENDS),  g.term(Token::ID), g.term(Token::LBRACE), g.nonterm("classfields"), g.term(Token::RBRACE),})
+          // .prod(g.nonterm("dec"), {g.term(Token::CLASS), g.term(Token::ID), g.term(Token::LBRACE), g.nonterm("classfields"), g.term(Token::RBRACE),})
+          // // .prod(g.nonterm("dec"), {g.term(Token::CLASS), g.term(Token::ID), g.term(Token::EXTENDS),  g.nonterm("type_id"), g.term(Token::LBRACE), g.nonterm("classfields"), g.term(Token::RBRACE),})
+          // .prod(g.nonterm("dec"), {g.term(Token::CLASS), g.term(Token::ID), g.term(Token::EXTENDS),  g.term(Token::ID), g.term(Token::LBRACE), g.nonterm("classfields"), g.term(Token::RBRACE),})
           // Variable declaration.
-      .prod(g.nonterm("dec"), {g.nonterm("vardec"),})
+      .prod(g.nonterm("dec"), {g.nonterm("vardec"),}, singleTerm)
           // Function declaration.
-      .prod(g.nonterm("dec"), {g.term(Token::FUNCTION), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::EQ), g.nonterm("exp"),})
-      // .prod(g.nonterm("dec"), {g.term(Token::FUNCTION), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::COLON), g.nonterm("type_id"), g.term(Token::EQ), g.nonterm("exp"),})
-      .prod(g.nonterm("dec"), {g.term(Token::FUNCTION), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::COLON), g.term(Token::ID), g.term(Token::EQ), g.nonterm("exp"),})
+      .prod(g.nonterm("dec"), {g.term(Token::FUNCTION), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::EQ), g.nonterm("exp"),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              auto funcname = term->get<Terminal>(1);
+              auto fields = term->get<ParsedTerm>(3);
+              auto body = term->get<ParsedTerm>(6);
+              return absSyntax.elem<FuncDecl>(
+                  term->position(),
+                  funcname->token().strValue(),
+                  fields->abstract<FieldList>(absSyntax),
+                  "", // no return value
+                  body->abstract<Expr>(absSyntax));
+            })
+          // .prod(g.nonterm("dec"), {g.term(Token::FUNCTION), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::COLON), g.nonterm("type_id"), g.term(Token::EQ), g.nonterm("exp"),})
+      .prod(g.nonterm("dec"), {g.term(Token::FUNCTION), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::COLON), g.term(Token::ID), g.term(Token::EQ), g.nonterm("exp"),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              auto funcname = term->get<Terminal>(1);
+              auto fields = term->get<ParsedTerm>(3);
+              auto result = term->get<Terminal>(6);
+              auto body = term->get<ParsedTerm>(8);
+              return absSyntax.elem<FuncDecl>(
+                  term->position(),
+                  funcname->token().strValue(),
+                  fields->abstract<FieldList>(absSyntax),
+                  result->token().strValue(),
+                  body->abstract<Expr>(absSyntax));
+            })
           // Primitive declaration.
-      // .prod(g.nonterm("dec"), {g.term(Token::PRIMITIVE), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN),})
-      // // .prod(g.nonterm("dec"), {g.term(Token::PRIMITIVE), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::COLON), g.nonterm("type_id"),})
-      // .prod(g.nonterm("dec"), {g.term(Token::PRIMITIVE), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::COLON), g.term(Token::ID"),})
+          // .prod(g.nonterm("dec"), {g.term(Token::PRIMITIVE), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN),})
+          // // .prod(g.nonterm("dec"), {g.term(Token::PRIMITIVE), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::COLON), g.nonterm("type_id"),})
+          // .prod(g.nonterm("dec"), {g.term(Token::PRIMITIVE), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::COLON), g.term(Token::ID"),})
           // Import a set of declaration.
-      // .prod(g.nonterm("dec"), {g.term(Token::IMPORT), g.term(Token::STRING),})
+          // .prod(g.nonterm("dec"), {g.term(Token::IMPORT), g.term(Token::STRING),})
 
-      .prod(g.nonterm("vardec"), {g.term(Token::VAR), g.term(Token::ID), g.term(Token::ASSIGN), g.nonterm("exp"),})
-      // .prod(g.nonterm("vardec"), {g.term(Token::VAR), g.term(Token::ID), g.term(Token::COLON), g.nonterm("type_id"), g.term(Token::ASSIGN), g.nonterm("exp"),})
-      .prod(g.nonterm("vardec"), {g.term(Token::VAR), g.term(Token::ID), g.term(Token::COLON), g.term(Token::ID), g.term(Token::ASSIGN), g.nonterm("exp"),})
+      .prod(g.nonterm("vardec"), {g.term(Token::VAR), g.term(Token::ID), g.term(Token::ASSIGN), g.nonterm("exp"),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              auto varname = term->get<Terminal>(1);
+              auto init = term->get<ParsedTerm>(3);
+              return absSyntax.elem<VarDecl>(
+                  term->position(),
+                  varname->token().strValue(),
+                  "", // typename
+                  init->abstract<Expr>(absSyntax));
+            })
+          // .prod(g.nonterm("vardec"), {g.term(Token::VAR), g.term(Token::ID), g.term(Token::COLON), g.nonterm("type_id"), g.term(Token::ASSIGN), g.nonterm("exp"),})
+      .prod(g.nonterm("vardec"), {g.term(Token::VAR), g.term(Token::ID), g.term(Token::COLON), g.term(Token::ID), g.term(Token::ASSIGN), g.nonterm("exp"),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              auto varname = term->get<Terminal>(1);
+              auto type_name = term->get<Terminal>(3);
+              auto init = term->get<ParsedTerm>(5);
+              return absSyntax.elem<VarDecl>(
+                  term->position(),
+                  varname->token().strValue(),
+                  type_name->token().strValue(),
+                  init->abstract<Expr>(absSyntax));
+            })
 
-      // .prod(g.nonterm("classfields"), {})
-      // .prod(g.nonterm("classfields"), {g.nonterm("classfields"), g.nonterm("classfield"),})
+          // .prod(g.nonterm("classfields"), {})
+          // .prod(g.nonterm("classfields"), {g.nonterm("classfields"), g.nonterm("classfield"),})
           // Class fields.
-      // .prod(g.nonterm("classfield"), {g.nonterm("vardec"),})
-      // .prod(g.nonterm("classfield"), {g.term(Token::METHOD), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::EQ), g.nonterm("exp"),})
-      // // .prod(g.nonterm("classfield"), {g.term(Token::METHOD), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::COLON), g.nonterm("type_id"), g.term(Token::EQ), g.nonterm("exp"),})
-      // .prod(g.nonterm("classfield"), {g.term(Token::METHOD), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::COLON), g.term(Token::ID), g.term(Token::EQ), g.nonterm("exp"),})
+          // .prod(g.nonterm("classfield"), {g.nonterm("vardec"),})
+          // .prod(g.nonterm("classfield"), {g.term(Token::METHOD), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::EQ), g.nonterm("exp"),})
+          // // .prod(g.nonterm("classfield"), {g.term(Token::METHOD), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::COLON), g.nonterm("type_id"), g.term(Token::EQ), g.nonterm("exp"),})
+          // .prod(g.nonterm("classfield"), {g.term(Token::METHOD), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::COLON), g.term(Token::ID), g.term(Token::EQ), g.nonterm("exp"),})
 
           // Types.
-      // .prod(g.nonterm("ty"), {g.nonterm("type_id"),})
-      .prod(g.nonterm("ty"), {g.term(Token::ID),})
-      .prod(g.nonterm("ty"), {g.term(Token::LBRACE), g.nonterm("tyfields"), g.term(Token::RBRACE),})
-      // .prod(g.nonterm("ty"), {g.term(Token::ARRAY), g.term(Token::OF), g.nonterm("type_id"),})
-      .prod(g.nonterm("ty"), {g.term(Token::ARRAY), g.term(Token::OF), g.term(Token::ID),})
-      // .prod(g.nonterm("ty"), {g.term(Token::CLASS), g.term(Token::LBRACE), g.nonterm("classfields"), g.term(Token::RBRACE),})
-      // // .prod(g.nonterm("ty"), {g.term(Token::CLASS), g.term(Token::EXTENDS),  g.nonterm("type_id"), g.term(Token::LBRACE), g.nonterm("classfields"), g.term(Token::RBRACE),})
-      // .prod(g.nonterm("ty"), {g.term(Token::CLASS), g.term(Token::EXTENDS),  g.term(Token::ID), g.term(Token::LBRACE), g.nonterm("classfields"), g.term(Token::RBRACE),})
+          // .prod(g.nonterm("ty"), {g.nonterm("type_id"),})
+      .prod(g.nonterm("ty"), {g.term(Token::ID),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              auto type_name = term->get<Terminal>(0);
+              return absSyntax.elem<AliasType>(
+                  term->position(), type_name->token().strValue());
+            })
+      .prod(g.nonterm("ty"), {g.term(Token::LBRACE), g.nonterm("tyfields"), g.term(Token::RBRACE)},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              auto fields = term->get<ParsedTerm>(1);
+              return absSyntax.elem<RecordType>(
+                  term->position(), fields->abstract<FieldList>(absSyntax));
+            })
+          // .prod(g.nonterm("ty"), {g.term(Token::ARRAY), g.term(Token::OF), g.nonterm("type_id"),})
+      .prod(g.nonterm("ty"), {g.term(Token::ARRAY), g.term(Token::OF), g.term(Token::ID),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              auto type_name = term->get<Terminal>(2);
+              return absSyntax.elem<ArrayType>(
+                  term->position(), type_name->token().strValue());
+            })
+          // .prod(g.nonterm("ty"), {g.term(Token::CLASS), g.term(Token::LBRACE), g.nonterm("classfields"), g.term(Token::RBRACE),})
+          // // .prod(g.nonterm("ty"), {g.term(Token::CLASS), g.term(Token::EXTENDS),  g.nonterm("type_id"), g.term(Token::LBRACE), g.nonterm("classfields"), g.term(Token::RBRACE),})
+          // .prod(g.nonterm("ty"), {g.term(Token::CLASS), g.term(Token::EXTENDS),  g.term(Token::ID), g.term(Token::LBRACE), g.nonterm("classfields"), g.term(Token::RBRACE),})
 
-      .prod(g.nonterm("tyfields"), {})
-      // .prod(g.nonterm("tyfields"), {g.term(Token::ID), g.term(Token::COLON), g.nonterm("type_id"), g.closure("closure6"),})
-      .prod(g.nonterm("tyfields"), {g.term(Token::ID), g.term(Token::COLON), g.term(Token::ID), g.closure("closure6"),})
+      .prod(g.nonterm("tyfields"), {},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              return absSyntax.elem<FieldList>(term->position(), vector<Field*>());
+            })
+          // .prod(g.nonterm("tyfields"), {g.term(Token::ID), g.term(Token::COLON), g.nonterm("type_id"), g.closure("closure6"),})
+      .prod(g.nonterm("tyfields"), {g.term(Token::ID), g.term(Token::COLON), g.term(Token::ID), g.closure("closure6"),},
+            [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
+              vector<Field*> fields;
+              for (size_t i = 2; i + 3 < term->children().size(); i += 3) {
+                auto name = term->get<Terminal>(i);
+                auto type_name = term->get<Terminal>(i + 2);
+                fields.emplace_back(absSyntax.elem<Field>(
+                    name->position(),
+                    name->token().strValue(),
+                    type_name->token().strValue()));
+              }
+              return absSyntax.elem<FieldList>(
+                  term->position(), std::move(fields));
+            })
       .prod(g.closure("closure6"), {})
-      // // .prod(g.closure("closure6"), {g.term(Token::COMMA), g.term(Token::ID), g.term(Token::COLON), g.nonterm("type_id"), g.closure("closure6"),})
-      // .prod(g.closure("closure6"), {g.term(Token::COMMA), g.term(Token::ID), g.term(Token::COLON), g.term(Token::ID), g.closure("closure6"),})
+          // // .prod(g.closure("closure6"), {g.term(Token::COMMA), g.term(Token::ID), g.term(Token::COLON), g.nonterm("type_id"), g.closure("closure6"),})
+          // .prod(g.closure("closure6"), {g.term(Token::COMMA), g.term(Token::ID), g.term(Token::COLON), g.term(Token::ID), g.closure("closure6"),})
       .prod(g.closure("closure6"), {g.term(Token::COMMA), g.term(Token::ID), g.term(Token::COLON), g.term(Token::ID), g.closure("closure6"),})
 
-      // .prod(g.nonterm("type_id"), {g.term(Token::ID),})
+          // .prod(g.nonterm("type_id"), {g.term(Token::ID),})
 
           // Operators.
-      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::TIMES), g.nonterm("exp")}, {Production::LEFT, Production::FIRST})
-      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::DIVIDE), g.nonterm("exp")}, {Production::LEFT, Production::FIRST})
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::TIMES), g.nonterm("exp")}, opExpr, Production::Attribute(Production::LEFT, Production::FIRST))
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::DIVIDE), g.nonterm("exp")}, opExpr, Production::Attribute(Production::LEFT, Production::FIRST))
 
-      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::PLUS), g.nonterm("exp")}, {Production::LEFT, Production::SECOND})
-      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::MINUS), g.nonterm("exp")}, {Production::LEFT, Production::SECOND})
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::PLUS), g.nonterm("exp")}, opExpr, Production::Attribute(Production::LEFT, Production::SECOND))
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::MINUS), g.nonterm("exp")}, opExpr, Production::Attribute(Production::LEFT, Production::SECOND))
 
-      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::EQ), g.nonterm("exp")}, {Production::NONE, Production::THIRD})
-      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::NEQ), g.nonterm("exp")}, {Production::NONE, Production::THIRD})
-      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::GT), g.nonterm("exp")}, {Production::NONE, Production::THIRD})
-      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::LT), g.nonterm("exp")}, {Production::NONE, Production::THIRD})
-      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::GE), g.nonterm("exp")}, {Production::NONE, Production::THIRD})
-      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::LE), g.nonterm("exp")}, {Production::NONE, Production::THIRD})
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::EQ), g.nonterm("exp")}, opExpr, Production::Attribute(Production::NONE, Production::THIRD))
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::NEQ), g.nonterm("exp")}, opExpr, Production::Attribute(Production::NONE, Production::THIRD))
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::GT), g.nonterm("exp")}, opExpr, Production::Attribute(Production::NONE, Production::THIRD))
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::LT), g.nonterm("exp")}, opExpr, Production::Attribute(Production::NONE, Production::THIRD))
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::GE), g.nonterm("exp")}, opExpr, Production::Attribute(Production::NONE, Production::THIRD))
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::LE), g.nonterm("exp")}, opExpr, Production::Attribute(Production::NONE, Production::THIRD))
 
-      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::AND), g.nonterm("exp")}, {Production::LEFT, Production::FOURTH})
-      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::OR), g.nonterm("exp")}, {Production::LEFT, Production::FOURTH})
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::AND), g.nonterm("exp")}, opExpr, Production::Attribute(Production::LEFT, Production::FOURTH))
+      .prod(g.nonterm("exp"), {g.nonterm("exp"), g.term(Token::OR), g.nonterm("exp")}, opExpr, Production::Attribute(Production::LEFT, Production::FOURTH))
       .startAt(g.nonterm("program"));
 
   return std::make_unique<const Grammar>(g.build());

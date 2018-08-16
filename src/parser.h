@@ -12,7 +12,10 @@
 #include <unordered_set>
 #include <ostream>
 #include <valarray>
+#include <functional>
 #include "lexer.h"
+#include "syntax.h"
+#include "util.h"
 
 using std::vector;
 using std::valarray;
@@ -20,21 +23,29 @@ using std::deque;
 using std::unique_ptr;
 using std::unordered_map;
 using std::unordered_set;
+using std::function;
 
 namespace tiger::syntax {
+class BaseElement;
+class AbstractSyntax;
+}
+
+namespace tiger::grammar {
 using lex::Token;
-class Symbol {
+
+
+class GrammarSymbol {
 public:
   virtual bool isTerminal() const noexcept = 0;
   virtual bool isNonTerminal() const noexcept = 0;
   virtual string name() const noexcept = 0;
-  virtual bool operator==(const Symbol& rhs) const noexcept {
+  virtual bool operator==(const GrammarSymbol& rhs) const noexcept {
     return name() == rhs.name();
   }
-  bool operator!=(const Symbol& rhs) const noexcept {
+  bool operator!=(const GrammarSymbol& rhs) const noexcept {
     return !operator==(rhs);
   }
-  friend std::ostream &operator<<(std::ostream &os, const Symbol &symbol) {
+  friend std::ostream &operator<<(std::ostream &os, const GrammarSymbol &symbol) {
 #ifndef NDEBUG
     symbol.indentedPrint(os);
 #else
@@ -49,6 +60,9 @@ public:
   virtual void print(std::ostream& os, size_t indent = 0) const {
     os << name();
   }
+  virtual lex::Position position() const noexcept {
+    return lex::Position();
+  }
 
 protected:
   static void printIndent(std::ostream& os, size_t indent) {
@@ -57,7 +71,7 @@ protected:
   }
 };
 
-class Terminal : public Symbol {
+class Terminal : public GrammarSymbol {
 public:
   explicit Terminal(Token token) : token_(std::move(token)) {}
   explicit Terminal(Terminal&& other) noexcept = default;
@@ -65,6 +79,8 @@ public:
   bool isTerminal() const noexcept override { return true; }
   bool isNonTerminal() const noexcept override { return false; }
   string name() const noexcept override { return token_.name(); }
+  constexpr const Token& token() const noexcept { return token_; }
+
   friend std::ostream& operator<<(std::ostream& os, const Terminal& terminal) {
 #ifndef NDEBUG
     terminal.indentedPrint(os);
@@ -80,20 +96,22 @@ public:
   void print(std::ostream& os, size_t indent = 0) const override {
     os << token_;
   }
-  bool operator==(const Symbol& rhs) const noexcept override {
-    return Symbol::operator==(rhs) && rhs.isTerminal() &&
+  bool operator==(const GrammarSymbol& rhs) const noexcept override {
+    return GrammarSymbol::operator==(rhs) && rhs.isTerminal() &&
         operator==(dynamic_cast<const Terminal&>(rhs));
   }
   bool operator==(const Terminal& rhs) const noexcept {
     return token_ == rhs.token_;
   }
-
+  lex::Position position() const noexcept override {
+    return token_.position();
+  }
 
 protected:
   Token token_;
 };
 
-class NonTerminal : public Symbol {
+class NonTerminal : public GrammarSymbol {
 public:
   explicit NonTerminal(string name, bool isClosure = false)
       : name_(std::move(name)), isClosure_(isClosure) {}
@@ -118,30 +136,51 @@ protected:
   bool isClosure_ = false;
 };
 
+class Production;
+
 class ParsedTerm : public NonTerminal {
 public:
   // explicit ParsedTerm(string name) : NonTerminal(std::move(name)) {}
   // explicit ParsedTerm(const char_t *name) : NonTerminal(name) {}
-  explicit ParsedTerm(const NonTerminal& other) : NonTerminal(other) {}
+  explicit ParsedTerm(const NonTerminal& other, const Production *prod = nullptr)
+      : NonTerminal(other), prod_(prod) {}
   explicit ParsedTerm(ParsedTerm&& other) = default;
-  explicit ParsedTerm(string name, deque<Symbol*>&& syms)
+  explicit ParsedTerm(string name, deque<GrammarSymbol*>&& syms,
+                      const Production *prod = nullptr)
       : NonTerminal(std::move(name)) {
     for (auto sym : syms) {
       children_.emplace_back(sym);
     }
   }
 
-  void addChildFront(unique_ptr<Symbol>&& child) {
+  void addChildFront(unique_ptr<GrammarSymbol>&& child) {
     children_.emplace_front(std::move(child));
   }
-  void addChildBack(unique_ptr<Symbol>&& child) {
+  void addChildBack(unique_ptr<GrammarSymbol>&& child) {
     children_.emplace_back(std::move(child));
   }
 
   const auto& children() const & noexcept { return children_; }
   auto children() && noexcept { return std::move(children_); }
-  // Symbol *operator[](size_t index) const noexcept { return children_[index].get(); }
+  // GrammarSymbol *operator[](size_t index) const noexcept { return children_[index].get(); }
   bool empty() const noexcept { return  children_.empty(); }
+  constexpr const Production *production() const noexcept { return prod_; }
+
+
+  template <typename T>
+  const T *get(size_t index) const {
+    return dynamic_cast<T*>(children_[index].get());
+  }
+
+  lex::Position position() const noexcept {
+    if (children_.empty())
+      return lex::Position();
+    else
+      return children_.front()->position();
+  }
+
+  template <typename T = syntax::BaseElement>
+  T *abstract(syntax::AbstractSyntax& absSyntax) const;
 
   friend std::ostream& operator<<(std::ostream& os, const ParsedTerm& term) {
 #ifndef NDEBUG
@@ -175,8 +214,8 @@ public:
     os << ")";
   }
 
-  bool operator==(const Symbol& rhs) const noexcept override {
-    return Symbol::operator==(rhs) && rhs.isNonTerminal() &&
+  bool operator==(const GrammarSymbol& rhs) const noexcept override {
+    return GrammarSymbol::operator==(rhs) && rhs.isNonTerminal() &&
         operator==(dynamic_cast<const ParsedTerm&>(rhs));
   }
   bool operator!=(const ParsedTerm& rhs) const noexcept {
@@ -193,11 +232,14 @@ public:
   }
 
 protected:
-  deque<unique_ptr<Symbol>> children_;
+  deque<unique_ptr<GrammarSymbol>> children_;
+  const Production *prod_;
 };
 
 class Production {
 public:
+  using SemanticFunc = function<
+      syntax::BaseElement*(const ParsedTerm*, syntax::AbstractSyntax& syntax)>;
   enum Associative : int8_t { NONE = -1, LEFT, RIGHT };
   enum PriorityClass : uint8_t {
     UNDEF = 0x7f,
@@ -215,9 +257,16 @@ public:
         : assoc(assoc), prior(prior) {}
   };
 
-  Production(NonTerminal *head, vector<Symbol*>&& body)
+  Production(NonTerminal *head, vector<GrammarSymbol*>&& body,
+             SemanticFunc&& semantic)
+      : head_(head), body_(std::move(body)), semantic_(std::move(semantic)) {}
+  Production(NonTerminal *head, vector<GrammarSymbol*>&& body)
       : head_(head), body_(std::move(body)) {}
-  Production(NonTerminal *head, vector<Symbol*>&& body, Attribute attr)
+  Production(NonTerminal *head, vector<GrammarSymbol*>&& body,
+             SemanticFunc&& semantic, Attribute attr)
+      : head_(head), body_(std::move(body)), semantic_(std::move(semantic)),
+        attr_(attr) {}
+  Production(NonTerminal *head, vector<GrammarSymbol*>&& body, Attribute attr)
       : head_(head), body_(std::move(body)), attr_(attr) {}
   Production(const Production& other) = default;
   Production(Production&& other) noexcept = default;
@@ -225,7 +274,7 @@ public:
   Production& operator=(Production&& other) noexcept = default;
   size_t size() const noexcept { return body_.size(); }
   bool empty() const noexcept { return body_.empty(); }
-  Symbol *operator[](size_t index) const noexcept { return body_[index]; }
+  GrammarSymbol *operator[](size_t index) const noexcept { return body_[index]; }
   constexpr NonTerminal *head() const noexcept { return head_; }
   friend std::ostream& operator<<(std::ostream& os,
                                   const Production& production) {
@@ -251,6 +300,10 @@ public:
     return !(rhs == *this);
   }
 
+  auto operator()(const ParsedTerm *term, syntax::AbstractSyntax& absSyntax) const {
+    return semantic_(term, absSyntax);
+  }
+
   PriorityComp priorierThan(const Production *rhs) const {
     if (prior() == UNDEF && rhs->prior() == UNDEF)
       return DEFAULT;
@@ -273,16 +326,22 @@ protected:
   constexpr PriorityClass prior() const noexcept { return attr_.prior; }
 
   NonTerminal *head_;
-  vector<Symbol*> body_;
+  vector<GrammarSymbol*> body_;
+  SemanticFunc semantic_;
   Attribute attr_;
 };
+
+template<typename T>
+T *ParsedTerm::abstract(syntax::AbstractSyntax& absSyntax) const {
+  return dynamic_cast<T*>((*production())(this, absSyntax));
+}
 
 class Grammar {
 public:
   explicit Grammar(vector<unique_ptr<Terminal>>&& terms,
                    vector<unique_ptr<NonTerminal>>&& nonterms,
                    vector<unique_ptr<Production>>&& prods,
-                   unordered_map<Token::Type, Terminal*> termTypeHash,
+                   unordered_map<Token::Kind, Terminal*> termTypeHash,
                    NonTerminal *aug, Terminal *eof) noexcept;
   explicit Grammar(Grammar&& other) = default;
 
@@ -292,7 +351,7 @@ public:
   constexpr NonTerminal *aug() const noexcept { return aug_; }
   constexpr Terminal *eof() const noexcept { return eof_; }
   size_t indexOfTerm(Terminal *term) const noexcept { return termHash_.at(term); }
-  size_t indexOfToken(Token::Type type) const noexcept { return termTypeHash_.at(type); }
+  size_t indexOfToken(Token::Kind kind) const noexcept { return termTypeHash_.at(kind); }
   size_t indexOfNonterm(NonTerminal *nonterm) const noexcept {
     return nontermHash_.at(nonterm);
   }
@@ -316,16 +375,17 @@ public:
     Terminal *term(const Token& token);
     NonTerminal *nonterm(string name);
     NonTerminal *closure(string name);
-    Builder& prod(NonTerminal *nonterm, vector<Symbol*>&& syms) {
-      if (syms.empty())
-        nonterm->nullable(true);
-      prods_.emplace_back(std::make_unique<Production>(nonterm, std::move(syms)));
-      return *this;
-    }
-    Builder& prod(NonTerminal *nonterm, vector<Symbol*>&& syms, Production::Attribute attr) {
-      prods_.emplace_back(std::make_unique<Production>(nonterm, std::move(syms), attr));
-      return *this;
-    }
+
+    template <typename... Args>
+    Builder& prod(NonTerminal *nonterm,
+                  vector<GrammarSymbol*>&& syms,
+                  Args&&... args);
+    // Builder& prod(NonTerminal *nonterm, vector<GrammarSymbol*>&& syms,
+    //               Production::SemanticFunc&& semantic);
+    // Builder& prod(NonTerminal *nonterm,
+    //               vector<GrammarSymbol*>&& syms,
+    //               Production::SemanticFunc&& semantic,
+    //               Production::Attribute attr);
     /*
     Builder& addProductions(std::vector<Production>&& prods) {
       for (auto&& prod : std::move(prods)) {
@@ -335,7 +395,8 @@ public:
     }
     */
     Builder& startAt(NonTerminal *start) noexcept {
-      prods_.emplace_back(new Production(aug_ = nonterm(" aug"), {start,}));
+      prods_.emplace_back(new Production(
+          aug_ = nonterm(" aug"), {start,}, Production::SemanticFunc()));
       return *this;
     }
     Grammar build() noexcept;
@@ -345,7 +406,7 @@ public:
     vector<unique_ptr<NonTerminal>> nonterms_;
     vector<unique_ptr<Production>> prods_;
     unordered_map<string, NonTerminal*> nontermHash_;
-    unordered_map<Token::Type, Terminal*> termHash_;
+    unordered_map<Token::Kind, Terminal*> termHash_;
     NonTerminal *aug_ = nullptr;
   };
 
@@ -362,12 +423,22 @@ protected:
   unordered_map<NonTerminal*, size_t> nontermHash_;
   unordered_map<const Production*, size_t> prodHash_;
   vector<std::pair<size_t, size_t>> prodRanges_;
-  unordered_map<Token::Type, size_t> termTypeHash_;
+  unordered_map<Token::Kind, size_t> termTypeHash_;
   vector<valarray<bool>> firsts_;
   vector<valarray<bool>> follows_;
   NonTerminal *aug_;
   Terminal *eof_;
 };
+
+template<typename... Args>
+Grammar::Builder& Grammar::Builder::prod(
+    NonTerminal *nonterm, vector<GrammarSymbol *>&& syms, Args&& ... args) {
+  if (syms.empty())
+    nonterm->nullable(true);
+  prods_.emplace_back(std::make_unique<Production>(
+      nonterm, std::move(syms), std::move(args)...));
+  return *this;
+}
 
 class GrammarItem {
 public:
@@ -403,7 +474,7 @@ public:
   explicit constexpr LR0Item(const Production *prod, size_t index) noexcept
       : GrammarItem(prod), index_(index) {}
 
-  Symbol *nextSym() const {
+  GrammarSymbol *nextSym() const {
     if (const auto& prodBody = prod_->body(); index_ < prodBody.size())
       return prodBody[index_];
     else
@@ -451,14 +522,15 @@ protected:
 };
 
 struct Action {
-  enum Type { SHIFT, REDUCE, ACCEPT, ERROR = -1, UNDEF = -2, } type;
+  enum Kind { SHIFT, REDUCE, ACCEPT, ERROR = -1, UNDEF = -2, } kind
+      ;
   union { size_t toState; size_t useProd; size_t param; };
 
-  constexpr Action() noexcept : type(UNDEF), param() {}
-  constexpr Action(Type type, size_t param = 0) noexcept : type(type), param(param) {}
-  constexpr bool empty() const noexcept { return type == UNDEF; }
-  constexpr bool isReduce() const noexcept { return type == REDUCE; }
-  constexpr bool isShift() const noexcept { return type == SHIFT; }
+  constexpr Action() noexcept : kind(UNDEF), param() {}
+  constexpr Action(Kind kind, size_t param = 0) noexcept : kind(kind), param(param) {}
+  constexpr bool empty() const noexcept { return kind == UNDEF; }
+  constexpr bool isReduce() const noexcept { return kind == REDUCE; }
+  constexpr bool isShift() const noexcept { return kind == SHIFT; }
 
   static constexpr Action SHIFT_(size_t toState) noexcept {
     return Action{SHIFT, toState};
@@ -468,7 +540,7 @@ struct Action {
   }
 
   friend std::ostream& operator<<(std::ostream& os, const Action& action) {
-    switch (action.type) {
+    switch (action.kind) {
     case SHIFT: return os << "shift state " << action.toState;
     case REDUCE: return os << "reduce with " << action.useProd;
     case ACCEPT: return os << "accept";
