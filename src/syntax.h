@@ -99,6 +99,13 @@ public:
     return os;
   }
   virtual void print(std::ostream& os) const = 0;
+  virtual bool operator==(const BaseElement& other) const noexcept {
+    return typeid(*this) == typeid(other) && pos_ == other.pos_;
+  }
+  bool operator!=(const BaseElement& other) const noexcept {
+    return !operator==(other);
+  }
+  constexpr const Position& position() const noexcept { return pos_; }
 
 protected:
   Position pos_;
@@ -107,6 +114,11 @@ protected:
 class Program : public BaseElement {
 public:
   using BaseElement::BaseElement;
+  friend std::ostream& operator<<(std::ostream& os,
+                                  const Program& program) noexcept {
+    program.print(os);
+    return os;
+  }
 };
 
 class DeclList : public Program {
@@ -115,6 +127,7 @@ public:
       : Program(pos), decls_(std::move(decls)) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& _other) const noexcept override;
 
 protected:
   vector<Declaration*> decls_;
@@ -137,6 +150,10 @@ public:
       : Expr(pos), value_(value) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& other) const noexcept override {
+    return Expr::operator==(other) &&
+        value_ == dynamic_cast<decltype(*this)>(other).value_;
+  }
 
 protected:
   int value_;
@@ -147,6 +164,10 @@ public:
       : Expr(pos), value_(std::move(value)) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& other) const noexcept override {
+    return Expr::operator==(other) &&
+        value_ == dynamic_cast<decltype(*this)>(other).value_;
+  }
 
 protected:
   string value_;
@@ -158,6 +179,15 @@ public:
       : Expr(pos), typename_(std::move(type_name)), size_(size), init_(init) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& _other) const noexcept override {
+    if (!BaseElement::operator==(_other))
+      return false;
+    else {
+      auto other = dynamic_cast<decltype(*this)>(_other);
+      return typename_ == other.typename_ &&
+          *size_ == *other.size_ && *init_ == *other.init_;
+    }
+  }
 
 protected:
   string typename_;
@@ -171,6 +201,7 @@ public:
       : Expr(pos), typename_(std::move(type_name)), fields_(std::move(fields)) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& _other) const noexcept override;
 
 protected:
   string typename_;
@@ -183,6 +214,19 @@ public:
       : Expr(pos), funcname_(std::move(funcname)), args_(std::move(args)) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& _other) const noexcept override {
+    if (!BaseElement::operator==(_other))
+      return false;
+    else {
+      auto other = dynamic_cast<decltype(*this)>(_other);
+      if (funcname_ != other.funcname_ || args_.size() != other.args_.size())
+        return false;
+      for (size_t i = 0; i < args_.size(); ++i)
+        if (*args_[i] != *other.args_[i])
+          return false;
+      return true;
+    }
+  }
 
 protected:
   string funcname_;
@@ -198,6 +242,14 @@ public:
 
   constexpr explicit OpExpr(const Position& pos, Kind op, Expr *lhs, Expr *rhs) noexcept
       : Expr(pos), op_(op), lhs_(lhs), rhs_(rhs) {}
+  bool operator==(const BaseElement& _other) const noexcept override {
+    if (!BaseElement::operator==(_other))
+      return false;
+    else {
+      auto other = dynamic_cast<decltype(*this)>(_other);
+      return op_ == other.op_ && *lhs_ == *other.lhs_ && *rhs_ == *other.rhs_;
+    }
+  }
 
   void print(std::ostream& os) const override;
 
@@ -212,6 +264,7 @@ public:
     : Expr(pos), exprs_(exprs) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& _other) const noexcept override;
 
 protected:
   ExprList *exprs_;
@@ -223,6 +276,7 @@ public:
       : Expr(pos), var_(var), value_(value)  {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& _other) const noexcept override;
 
 protected:
   VarExpr *var_;
@@ -235,6 +289,15 @@ public:
       : Expr(pos), test_(test), then_(then), else_(elsee) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& _other) const noexcept override {
+    if (!BaseElement::operator==(_other))
+      return false;
+    else {
+      auto other = dynamic_cast<decltype(*this)>(_other);
+      return *test_ == *other.test_ && *then_ == *other.then_ &&
+          (!else_ && !other.else_ || *else_ == *other.else_);
+    }
+  }
 
 protected:
   Expr *test_;
@@ -248,6 +311,14 @@ public:
       : Expr(pos), test_(test), body_(body) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& _other) const noexcept override {
+    if (!BaseElement::operator==(_other))
+      return false;
+    else {
+      auto other = dynamic_cast<decltype(*this)>(_other);
+      return *test_ == *other.test_ && *body_ == *other.body_;
+    }
+  }
 
 protected:
   Expr *test_;
@@ -261,6 +332,15 @@ public:
         begin_(begin), end_(end), body_(body) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& _other) const noexcept override {
+    if (!BaseElement::operator==(_other))
+      return false;
+    else {
+      auto other = dynamic_cast<decltype(*this)>(_other);
+      return varname_ == other.varname_ && *begin_ == *other.begin_ &&
+          *end_ == *other.end_ && *body_ == *other.body_;
+    }
+  }
 
 protected:
   string varname_;
@@ -280,6 +360,7 @@ public:
       : Expr(pos), declList_(declList), exprs_(exprs) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& _other) const noexcept override;
 
 protected:
   DeclList *declList_;
@@ -292,6 +373,19 @@ public:
       : BaseElement(pos), exprs_(std::move(exprs)) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& _other) const noexcept override {
+    if (!BaseElement::operator==(_other))
+      return false;
+    else {
+      auto other = dynamic_cast<decltype(*this)>(_other);
+      if (exprs_.size() != other.exprs_.size())
+        return false;
+      for (size_t i = 0; i < exprs_.size(); ++i)
+        if (*exprs_[i] != *other.exprs_[i])
+          return false;
+      return true;
+    }
+  }
 
 protected:
   vector<Expr*> exprs_;
@@ -308,6 +402,14 @@ public:
       : VarExpr(pos), name_(std::move(name)) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& _other) const noexcept override {
+    if (!BaseElement::operator==(_other))
+      return false;
+    else {
+      auto other = dynamic_cast<decltype(*this)>(_other);
+      return name_ == other.name_;
+    }
+  }
 
 protected:
   string name_;
@@ -318,6 +420,14 @@ public:
       : VarExpr(pos), var_(var), subscript_(subscript) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& _other) const noexcept override {
+    if (!BaseElement::operator==(_other))
+      return false;
+    else {
+      auto other = dynamic_cast<decltype(*this)>(_other);
+      return *var_ == *other.var_ && *subscript_ == *other.subscript_;
+    }
+  }
 
 protected:
   VarExpr *var_;
@@ -329,6 +439,14 @@ public:
       : VarExpr(pos), var_(var), field_(std::move(field)) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& _other) const noexcept override {
+    if (!BaseElement::operator==(_other))
+      return false;
+    else {
+      auto other = dynamic_cast<decltype(*this)>(_other);
+      return *var_ == *other.var_ && field_ == other.field_;
+    }
+  }
 
 protected:
   VarExpr *var_;
@@ -346,6 +464,7 @@ public:
       : Declaration(pos), name_(std::move(name)), type_(type) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& _other) const noexcept override;
 
 protected:
   string name_;
@@ -360,6 +479,15 @@ public:
         typename_(std::move(type_name)), init_(init) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& _other) const noexcept override {
+    if (!BaseElement::operator==(_other))
+      return false;
+    else {
+      auto other = dynamic_cast<decltype(*this)>(_other);
+      return varname_ == other.varname_ &&
+          typename_ == other.typename_ && *init_ == *other.init_;
+    }
+  }
 
 protected:
   string varname_;
@@ -374,6 +502,7 @@ public:
         params_(params), result_(std::move(result)), body_(body) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& _other) const noexcept override;
 
 protected:
   string name_;
@@ -398,6 +527,14 @@ public:
       : Type(pos), typename_(std::move(type_name)) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& _other) const noexcept override {
+    if (!BaseElement::operator==(_other))
+      return false;
+    else {
+      auto other = dynamic_cast<decltype(*this)>(_other);
+      return typename_ == other.typename_;
+    }
+  }
 
 protected:
   string typename_;
@@ -408,6 +545,7 @@ public:
       : Type(pos), fields_(fields) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& _other) const noexcept override;
 
 protected:
   FieldList *fields_;
@@ -418,6 +556,14 @@ public:
       : Type(pos), typename_(std::move(type_name)) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& _other) const noexcept override {
+    if (!BaseElement::operator==(_other))
+      return false;
+    else {
+      auto other = dynamic_cast<decltype(*this)>(_other);
+      return typename_ == other.typename_;
+    }
+  }
 
 protected:
   string typename_;
@@ -431,6 +577,14 @@ public:
         name_(std::move(name)), typename_(std::move(type_name)) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& _other) const noexcept override {
+    if (!BaseElement::operator==(_other))
+      return false;
+    else {
+      auto other = dynamic_cast<decltype(*this)>(_other);
+      return name_ == other.name_ && typename_ == other.typename_;
+    }
+  }
 
 protected:
   string name_;
@@ -443,6 +597,14 @@ public:
       : BaseElement(pos), name_(std::move(name)), value_(value) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& _other) const noexcept override {
+    if (!BaseElement::operator==(_other))
+      return false;
+    else {
+      auto other = dynamic_cast<decltype(*this)>(_other);
+      return name_ == other.name_ && *value_ == *other.value_;
+    }
+  }
 
 protected:
   string name_;
@@ -455,6 +617,19 @@ public:
       BaseElement(pos), fields_(std::move(fields)) {}
 
   void print(std::ostream& os) const override;
+  bool operator==(const BaseElement& _other) const noexcept override {
+    if (!BaseElement::operator==(_other))
+      return false;
+    else {
+      auto other = dynamic_cast<decltype(*this)>(_other);
+      if (fields_.size() != other.fields_.size())
+        return false;
+      for (size_t i = 0; i < fields_.size(); ++i)
+        if (*fields_[i] != *other.fields_[i])
+          return false;
+      return true;
+    }
+  }
 
 protected:
   vector<Field*> fields_;

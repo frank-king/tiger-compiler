@@ -553,34 +553,30 @@ unique_ptr<const Grammar> Grammar::tigerGrammar() {
           // Array and record creations.
       .prod(g.nonterm("exp"), {g.term(Token::ID), g.term(Token::LBRACK), g.nonterm("exp"), g.term(Token::RBRACK), g.term(Token::OF), g.nonterm("exp"),},
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
-              auto type_name = term->get<Terminal>(0);
-              auto size = term->get<ParsedTerm>(2);
-              auto init = term->get<ParsedTerm>(5);
+              auto type_name = term->get<Terminal>(0)->token().strValue();
+              auto size = term->get<ParsedTerm>(2)->abstract<Expr>(absSyntax);
+              auto init = term->get<ParsedTerm>(5)->abstract<Expr>(absSyntax);
               return absSyntax.elem<ArrayExpr>(
-                  term->position(), type_name->token().strValue(),
-                  size->abstract<Expr>(absSyntax),
-                  init->abstract<Expr>(absSyntax));
+                  term->position(), type_name, size, init);
             })
       .prod(g.nonterm("exp"), {g.term(Token::ID), g.term(Token::LBRACE), g.term(Token::RBRACE),},
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
-              auto type_name = term->get<Terminal>(0);
+              auto type_name = term->get<Terminal>(0)->token().strValue();
               return absSyntax.elem<RecordExpr>(
-                  term->position(), type_name->token().strValue(), vector<ValueField*>());
+                  term->position(), type_name, vector<ValueField*>());
             })
       .prod(g.nonterm("exp"), {g.term(Token::ID), g.term(Token::LBRACE), g.term(Token::ID), g.term(Token::EQ), g.nonterm("exp"), g.closure("closure1"), g.term(Token::RBRACE),},
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
-              auto type_name = term->get<Terminal>(0);
+              auto type_name = term->get<Terminal>(0)->token().strValue();
               vector<ValueField*> fields;
               for (size_t i = 2; i + 2 < term->children().size(); i += 3) {
                 auto id = term->get<Terminal>(i);
-                auto expr = term->get<ParsedTerm>(i + 2);
+                auto expr = term->get<ParsedTerm>(i + 2)->abstract<Expr>(absSyntax);
                 fields.emplace_back(absSyntax.elem<ValueField>(
-                    id->position(),
-                    id->token().strValue(),
-                    expr->abstract<Expr>(absSyntax)));
+                    id->position(), id->token().strValue(), expr));
               }
               return absSyntax.elem<RecordExpr>(
-                  term->position(), type_name->token().strValue(),
+                  term->position(), type_name,
                   std::move(fields));
             })
       .prod(g.closure("closure1"), {})
@@ -595,21 +591,20 @@ unique_ptr<const Grammar> Grammar::tigerGrammar() {
           // Function call
       .prod(g.nonterm("exp"), {g.term(Token::ID), g.term(Token::LPAREN), g.term(Token::RPAREN),},
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
-              auto funcname = term->get<Terminal>(0);
+              auto funcname = term->get<Terminal>(0)->token().strValue();
               return absSyntax.elem<CallExpr>(
-                  term->position(), funcname->token().strValue(), vector<Expr*>());
+                  term->position(), funcname, vector<Expr*>());
             })
       .prod(g.nonterm("exp"), {g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("exp"), g.closure("closure2"), g.term(Token::RPAREN),},
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
-              auto funcname = term->get<Terminal>(0);
+              auto funcname = term->get<Terminal>(0)->token().strValue();
               vector<Expr*> exprs;
               for (size_t i = 2; i + 1 < term->children().size(); i += 2) {
-                auto expr = term->get<ParsedTerm>(i);
-                exprs.emplace_back(expr->abstract<Expr>(absSyntax));
+                auto expr = term->get<ParsedTerm>(i)->abstract<Expr>(absSyntax);
+                exprs.emplace_back(expr);
               }
               return absSyntax.elem<CallExpr>(
-                  term->position(), funcname->token().strValue(),
-                  std::move(exprs));
+                  term->position(), funcname, std::move(exprs));
             })
 
       .prod(g.closure("closure2"), {})
@@ -622,72 +617,55 @@ unique_ptr<const Grammar> Grammar::tigerGrammar() {
           // Operations.
       .prod(g.nonterm("exp"), {g.term(Token::MINUS), g.nonterm("exp"),},
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
-              auto expr = term->get<ParsedTerm>(1);
+              auto expr = term->get<ParsedTerm>(1)->abstract<Expr>(absSyntax);
               return absSyntax.elem<OpExpr>(
                   term->position(),
                   OpExpr::MINUS,
                   absSyntax.elem<IntExpr>(term->position(), 0),
-                  expr->abstract<Expr>(absSyntax));
+                  expr);
             }, Production::Attribute(Production::RIGHT, Production::PROTECTED))
       .prod(g.nonterm("exp"), {g.term(Token::LPAREN), g.nonterm("exps"), g.term(Token::RPAREN),},
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
-              return term->get<ParsedTerm>(1)->abstract(absSyntax);
+              auto exprs = term->get<ParsedTerm>(1)->abstract<ExprList>(absSyntax);
+              return absSyntax.elem<SeqExpr>(term->position(), exprs);
             })
 
           // Assigns.
       .prod(g.nonterm("exp"), {g.nonterm("lvalue"), g.term(Token::ASSIGN), g.nonterm("exp"),},
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
-              auto var = term->get<ParsedTerm>(0);
-              auto expr = term->get<ParsedTerm>(2);
-              return absSyntax.elem<AssignExpr>(
-                  term->position(),
-                  var->abstract<VarExpr>(absSyntax),
-                  expr->abstract<Expr>(absSyntax));
+              auto var = term->get<ParsedTerm>(0)->abstract<VarExpr>(absSyntax);
+              auto expr = term->get<ParsedTerm>(2)->abstract<Expr>(absSyntax);
+              return absSyntax.elem<AssignExpr>(term->position(), var, expr);
             })
 
           // Control structures.
       .prod(g.nonterm("exp"), {g.term(Token::IF), g.nonterm("exp"), g.term(Token::THEN), g.nonterm("exp"),},
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
-              auto test = term->get<ParsedTerm>(1);
-              auto then = term->get<ParsedTerm>(3);
-              return absSyntax.elem<IfExpr>(
-                  term->position(),
-                  test->abstract<Expr>(absSyntax),
-                  then->abstract<Expr>(absSyntax),
-                  nullptr);
+              auto test = term->get<ParsedTerm>(1)->abstract<Expr>(absSyntax);
+              auto then = term->get<ParsedTerm>(3)->abstract<Expr>(absSyntax);
+              return absSyntax.elem<IfExpr>(term->position(), test, then, nullptr);
             })
       .prod(g.nonterm("exp"), {g.term(Token::IF), g.nonterm("exp"), g.term(Token::THEN), g.nonterm("exp"), g.term(Token::ELSE), g.nonterm("exp"),},
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
-              auto test = term->get<ParsedTerm>(1);
-              auto then = term->get<ParsedTerm>(3);
-              auto elsee = term->get<ParsedTerm>(5);
-              return absSyntax.elem<IfExpr>(
-                  term->position(),
-                  test->abstract<Expr>(absSyntax),
-                  then->abstract<Expr>(absSyntax),
-                  elsee->abstract<Expr>(absSyntax));
+              auto test = term->get<ParsedTerm>(1)->abstract<Expr>(absSyntax);
+              auto then = term->get<ParsedTerm>(3)->abstract<Expr>(absSyntax);
+              auto elsee = term->get<ParsedTerm>(5)->abstract<Expr>(absSyntax);
+              return absSyntax.elem<IfExpr>(term->position(), test, then, elsee);
             })
       .prod(g.nonterm("exp"), {g.term(Token::WHILE), g.nonterm("exp"), g.term(Token::DO), g.nonterm("exp"),},
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
-              auto test = term->get<ParsedTerm>(1);
-              auto body = term->get<ParsedTerm>(3);
-              return absSyntax.elem<WhileExpr>(
-                  term->position(),
-                  test->abstract<Expr>(absSyntax),
-                  body->abstract<Expr>(absSyntax));
+              auto test = term->get<ParsedTerm>(1)->abstract<Expr>(absSyntax);
+              auto body = term->get<ParsedTerm>(3)->abstract<Expr>(absSyntax);
+              return absSyntax.elem<WhileExpr>(term->position(), test, body);
             })
       .prod(g.nonterm("exp"), {g.term(Token::FOR), g.term(Token::ID), g.term(Token::ASSIGN), g.nonterm("exp"), g.term(Token::TO), g.nonterm("exp"), g.term(Token::DO), g.nonterm("exp"),},
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
-              auto varname = term->get<Terminal>(1);
-              auto begin = term->get<ParsedTerm>(3);
-              auto end = term->get<ParsedTerm>(5);
-              auto body = term->get<ParsedTerm>(7);
+              auto varname = term->get<Terminal>(1)->token().strValue();
+              auto begin = term->get<ParsedTerm>(3)->abstract<Expr>(absSyntax);
+              auto end = term->get<ParsedTerm>(5)->abstract<Expr>(absSyntax);
+              auto body = term->get<ParsedTerm>(7)->abstract<Expr>(absSyntax);
               return absSyntax.elem<ForExpr>(
-                  term->position(),
-                  varname->token().strValue(),
-                  begin->abstract<Expr>(absSyntax),
-                  end->abstract<Expr>(absSyntax),
-                  body->abstract<Expr>(absSyntax));
+                  term->position(), varname, begin, end, body);
             })
       .prod(g.nonterm("exp"), {g.term(Token::BREAK),},
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
@@ -695,12 +673,9 @@ unique_ptr<const Grammar> Grammar::tigerGrammar() {
             })
       .prod(g.nonterm("exp"), {g.term(Token::LET), g.nonterm("decs"), g.term(Token::IN), g.nonterm("exps"), g.term(Token::END),},
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
-              auto decls = term->get<ParsedTerm>(1);
-              auto exprs = term->get<ParsedTerm>(3);
-              return absSyntax.elem<LetExpr>(
-                  term->position(),
-                  decls->abstract<DeclList>(absSyntax),
-                  exprs->abstract<ExprList>(absSyntax));
+              auto decls = term->get<ParsedTerm>(1)->abstract<DeclList>(absSyntax);
+              auto exprs = term->get<ParsedTerm>(3)->abstract<ExprList>(absSyntax);
+              return absSyntax.elem<LetExpr>(term->position(), decls, exprs);
             })
 
       .prod(g.nonterm("lvalue"), {g.term(Token::ID), g.closure("closure3"),},
@@ -713,14 +688,12 @@ unique_ptr<const Grammar> Grammar::tigerGrammar() {
                     terminal->token().is(Token::DOT)) {
                   auto field = term->get<Terminal>(i + 1);
                   var = absSyntax.elem<FieldVar>(
-                      field->position(), var, field->token().strValue());
+                      var->position(), var, field->token().strValue());
                   i += 2;
                 } else if (terminal->token().is(Token::LBRACK)) {
                   auto subscript = term->get<ParsedTerm>(i + 1);
                   var = absSyntax.elem<SubscriptVar>(
-                      subscript->position(),
-                      var,
-                      subscript->abstract<Expr>(absSyntax));
+                      var->position(), var, subscript->abstract<Expr>(absSyntax));
                   i += 3;
                 } else {
                   break;
@@ -740,8 +713,8 @@ unique_ptr<const Grammar> Grammar::tigerGrammar() {
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
               vector<Expr*> exprs;
               for (size_t i = 0;  i < term->children().size(); i += 2) {
-                auto expr = term->get<ParsedTerm>(i);
-                exprs.emplace_back(expr->abstract<Expr>(absSyntax));
+                auto expr = term->get<ParsedTerm>(i)->abstract<Expr>(absSyntax);
+                exprs.emplace_back(expr);
               }
               return absSyntax.elem<ExprList>(term->position(), std::move(exprs));
             })
@@ -752,8 +725,8 @@ unique_ptr<const Grammar> Grammar::tigerGrammar() {
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
               vector<Declaration*> decls;
               for (size_t i = 0; i < term->children().size(); ++i) {
-                auto decl = term->get<ParsedTerm>(i);
-                decls.emplace_back(decl->abstract<Declaration>(absSyntax));
+                auto decl = term->get<ParsedTerm>(i)->abstract<Declaration>(absSyntax);
+                decls.emplace_back(decl);
               }
               return absSyntax.elem<DeclList>(term->position(), std::move(decls));
             })
@@ -763,10 +736,9 @@ unique_ptr<const Grammar> Grammar::tigerGrammar() {
           // Type declaration.
       .prod(g.nonterm("dec"), {g.term(Token::TYPE), g.term(Token::ID), g.term(Token::EQ), g.nonterm("ty"),},
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
-              auto name = term->get<Terminal>(1);
-              auto typee = term->get<ParsedTerm>(3);
-              return absSyntax.elem<TypeDecl>(
-                  term->position(), name->token().strValue(), typee->abstract<Type>(absSyntax));
+              auto name = term->get<Terminal>(1)->token().strValue();
+              auto typee = term->get<ParsedTerm>(3)->abstract<Type>(absSyntax);
+              return absSyntax.elem<TypeDecl>(term->position(), name, typee);
             })
           // Class definition.
           // .prod(g.nonterm("dec"), {g.term(Token::CLASS), g.term(Token::ID), g.term(Token::LBRACE), g.nonterm("classfields"), g.term(Token::RBRACE),})
@@ -777,29 +749,21 @@ unique_ptr<const Grammar> Grammar::tigerGrammar() {
           // Function declaration.
       .prod(g.nonterm("dec"), {g.term(Token::FUNCTION), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::EQ), g.nonterm("exp"),},
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
-              auto funcname = term->get<Terminal>(1);
-              auto fields = term->get<ParsedTerm>(3);
-              auto body = term->get<ParsedTerm>(6);
+              auto funcname = term->get<Terminal>(1)->token().strValue();
+              auto fields = term->get<ParsedTerm>(3)->abstract<FieldList>(absSyntax);
+              auto body = term->get<ParsedTerm>(6)->abstract<Expr>(absSyntax);
               return absSyntax.elem<FuncDecl>(
-                  term->position(),
-                  funcname->token().strValue(),
-                  fields->abstract<FieldList>(absSyntax),
-                  "", // no return value
-                  body->abstract<Expr>(absSyntax));
+                  term->position(), funcname, fields, "", /* no return value */ body);
             })
           // .prod(g.nonterm("dec"), {g.term(Token::FUNCTION), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::COLON), g.nonterm("type_id"), g.term(Token::EQ), g.nonterm("exp"),})
       .prod(g.nonterm("dec"), {g.term(Token::FUNCTION), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN), g.term(Token::COLON), g.term(Token::ID), g.term(Token::EQ), g.nonterm("exp"),},
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
-              auto funcname = term->get<Terminal>(1);
-              auto fields = term->get<ParsedTerm>(3);
-              auto result = term->get<Terminal>(6);
-              auto body = term->get<ParsedTerm>(8);
+              auto funcname = term->get<Terminal>(1)->token().strValue();
+              auto fields = term->get<ParsedTerm>(3)->abstract<FieldList>(absSyntax);
+              auto result = term->get<Terminal>(6)->token().strValue();
+              auto body = term->get<ParsedTerm>(8)->abstract<Expr>(absSyntax);
               return absSyntax.elem<FuncDecl>(
-                  term->position(),
-                  funcname->token().strValue(),
-                  fields->abstract<FieldList>(absSyntax),
-                  result->token().strValue(),
-                  body->abstract<Expr>(absSyntax));
+                  term->position(), funcname, fields, result, body);
             })
           // Primitive declaration.
           // .prod(g.nonterm("dec"), {g.term(Token::PRIMITIVE), g.term(Token::ID), g.term(Token::LPAREN), g.nonterm("tyfields"), g.term(Token::RPAREN),})
@@ -810,25 +774,19 @@ unique_ptr<const Grammar> Grammar::tigerGrammar() {
 
       .prod(g.nonterm("vardec"), {g.term(Token::VAR), g.term(Token::ID), g.term(Token::ASSIGN), g.nonterm("exp"),},
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
-              auto varname = term->get<Terminal>(1);
-              auto init = term->get<ParsedTerm>(3);
+              auto varname = term->get<Terminal>(1)->token().strValue();
+              auto init = term->get<ParsedTerm>(3)->abstract<Expr>(absSyntax);
               return absSyntax.elem<VarDecl>(
-                  term->position(),
-                  varname->token().strValue(),
-                  "", // typename
-                  init->abstract<Expr>(absSyntax));
+                  term->position(), varname, "", /* typename */ init);
             })
           // .prod(g.nonterm("vardec"), {g.term(Token::VAR), g.term(Token::ID), g.term(Token::COLON), g.nonterm("type_id"), g.term(Token::ASSIGN), g.nonterm("exp"),})
       .prod(g.nonterm("vardec"), {g.term(Token::VAR), g.term(Token::ID), g.term(Token::COLON), g.term(Token::ID), g.term(Token::ASSIGN), g.nonterm("exp"),},
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
-              auto varname = term->get<Terminal>(1);
-              auto type_name = term->get<Terminal>(3);
-              auto init = term->get<ParsedTerm>(5);
+              auto varname = term->get<Terminal>(1)->token().strValue();
+              auto type_name = term->get<Terminal>(3)->token().strValue();
+              auto init = term->get<ParsedTerm>(5)->abstract<Expr>(absSyntax);
               return absSyntax.elem<VarDecl>(
-                  term->position(),
-                  varname->token().strValue(),
-                  type_name->token().strValue(),
-                  init->abstract<Expr>(absSyntax));
+                  term->position(), varname, type_name, init);
             })
 
           // .prod(g.nonterm("classfields"), {})
@@ -843,22 +801,19 @@ unique_ptr<const Grammar> Grammar::tigerGrammar() {
           // .prod(g.nonterm("ty"), {g.nonterm("type_id"),})
       .prod(g.nonterm("ty"), {g.term(Token::ID),},
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
-              auto type_name = term->get<Terminal>(0);
-              return absSyntax.elem<AliasType>(
-                  term->position(), type_name->token().strValue());
+              auto type_name = term->get<Terminal>(0)->token().strValue();
+              return absSyntax.elem<AliasType>(term->position(), type_name);
             })
       .prod(g.nonterm("ty"), {g.term(Token::LBRACE), g.nonterm("tyfields"), g.term(Token::RBRACE)},
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
-              auto fields = term->get<ParsedTerm>(1);
-              return absSyntax.elem<RecordType>(
-                  term->position(), fields->abstract<FieldList>(absSyntax));
+              auto fields = term->get<ParsedTerm>(1)->abstract<FieldList>(absSyntax);
+              return absSyntax.elem<RecordType>(term->position(), fields);
             })
           // .prod(g.nonterm("ty"), {g.term(Token::ARRAY), g.term(Token::OF), g.nonterm("type_id"),})
       .prod(g.nonterm("ty"), {g.term(Token::ARRAY), g.term(Token::OF), g.term(Token::ID),},
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
-              auto type_name = term->get<Terminal>(2);
-              return absSyntax.elem<ArrayType>(
-                  term->position(), type_name->token().strValue());
+              auto type_name = term->get<Terminal>(2)->token().strValue();
+              return absSyntax.elem<ArrayType>(term->position(), type_name);
             })
           // .prod(g.nonterm("ty"), {g.term(Token::CLASS), g.term(Token::LBRACE), g.nonterm("classfields"), g.term(Token::RBRACE),})
           // // .prod(g.nonterm("ty"), {g.term(Token::CLASS), g.term(Token::EXTENDS),  g.nonterm("type_id"), g.term(Token::LBRACE), g.nonterm("classfields"), g.term(Token::RBRACE),})
@@ -872,7 +827,7 @@ unique_ptr<const Grammar> Grammar::tigerGrammar() {
       .prod(g.nonterm("tyfields"), {g.term(Token::ID), g.term(Token::COLON), g.term(Token::ID), g.closure("closure6"),},
             [](const ParsedTerm *term, AbstractSyntax& absSyntax) {
               vector<Field*> fields;
-              for (size_t i = 2; i + 3 < term->children().size(); i += 3) {
+              for (size_t i = 0; i < term->children().size(); i += 3) {
                 auto name = term->get<Terminal>(i);
                 auto type_name = term->get<Terminal>(i + 2);
                 fields.emplace_back(absSyntax.elem<Field>(
@@ -880,8 +835,7 @@ unique_ptr<const Grammar> Grammar::tigerGrammar() {
                     name->token().strValue(),
                     type_name->token().strValue()));
               }
-              return absSyntax.elem<FieldList>(
-                  term->position(), std::move(fields));
+              return absSyntax.elem<FieldList>(term->position(), std::move(fields));
             })
       .prod(g.closure("closure6"), {})
           // // .prod(g.closure("closure6"), {g.term(Token::COMMA), g.term(Token::ID), g.term(Token::COLON), g.nonterm("type_id"), g.closure("closure6"),})

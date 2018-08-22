@@ -19,7 +19,13 @@ using char_t = char;
 
 namespace tiger::lex {
 
-struct Position { long line, col; };
+struct Position {
+  long line, col;
+  Position& operator=(const Position& other) noexcept = default;
+  constexpr bool operator==(const Position& other) const noexcept {
+    return line == other.line && col == other.col;
+  }
+};
 
 class Token {
 public:
@@ -64,6 +70,7 @@ public:
     case INT: intValue_ = other.intValue_; break;
     default: break;
     }
+    pos_ = other.pos_;
     return *this;
   }
   Token& operator=(Token&& other) noexcept {
@@ -72,6 +79,7 @@ public:
     case INT: intValue_ = other.intValue_; break;
     default: break;
     }
+    pos_ = other.pos_;
     return *this;
   }
 
@@ -132,7 +140,7 @@ public:
       {"array", ARRAY}, {"if", IF}, {"then", THEN}, {"else", ELSE}, {"while", WHILE},
       {"for", FOR}, {"to", TO}, {"do", DO}, {"let", LET}, {"in", IN}, {"end", END},
       {"of", OF}, {"break", BREAK}, {"nil", NIL}, {"function", FUNCTION}, {"var", VAR},
-      {"kind", TYPE},
+      {"type", TYPE},
   };
 
 protected:
@@ -162,9 +170,9 @@ protected:
 class Lexer {
 public:
   explicit Lexer(string str)
-      : input_(std::make_unique<std::istringstream>(std::move(str))) {}
+      : input_(std::make_unique<std::istringstream>(std::move(str))), cur_{1, 1} {}
   explicit Lexer(fs::path path)
-      : input_(std::make_unique<std::ifstream>(std::move(path))) {}
+      : input_(std::make_unique<std::ifstream>(std::move(path))), cur_{1, 1} {}
 
   bool eof() noexcept;
   Token nextToken();

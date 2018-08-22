@@ -324,7 +324,7 @@ TEST(parser_test, test_parser) {
     let
       var N := 8
 
-      kind intArray = array of int
+      type intArray = array of int
 
       var row := intArray [ N ] of 0
       var col := intArray [ N ] of 0
