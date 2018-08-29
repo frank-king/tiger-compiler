@@ -148,9 +148,6 @@ void ExprList::print(std::ostream& os) const {
     os << *expr;
   });
 }
-Program *AbstractSyntax::abstract(const ParsedTerm *term) {
-  return program_ = term->abstract<Program>(*this);
-}
 
 bool DeclList::operator==(const BaseElement& _other) const noexcept {
   if (!BaseElement::operator==(_other))
@@ -228,5 +225,26 @@ bool RecordType::operator==(const BaseElement& _other) const noexcept {
   }
 }
 
+Program *AbstractSyntax::abstract(const ParsedTerm *term) {
+  return program_ = term->abstract<Program>(*this);
+}
+bool AbstractSyntax::checkType() {
+  return program_->checkType(this);
+}
 
+bool DeclList::checkType(AbstractSyntax *syntax) const {
+  return std::all_of(decls_.begin(), decls_.end(), [](Declaration *decl) {
+    return decl->checkType(syntax);
+  });
+}
+Ty *IntExpr::evalType(AbstractSyntax *syntax) const { return syntax->intTy(); }
+Ty *StrExpr::evalType(AbstractSyntax *syntax) const { return syntax->strTy(); }
+
+bool ArrayExpr::checkType(AbstractSyntax *syntax) const {
+  return size_->checkType(syntax) && size_->evalType(syntax)->isInt() &&
+      init_->checkType(syntax) && init_->evalType(syntax)->is(syntax->typeOf(typename_));
+}
+Ty *ArrayExpr::evalType(AbstractSyntax *syntax) const {
+  return nullptr;
+}
 } // namespace tiger::syntax

@@ -9,12 +9,16 @@
 #include <string>
 #include <vector>
 #include <ostream>
+#include <unordered_map>
+#include <deque>
 #include "lexer.h"
 #include "parser.h"
 
 using std::vector;
+using std::deque;
 using std::string;
 using std::unique_ptr;
+using std::unordered_map;
 
 namespace tiger::grammar {
 class ParsedTerm;
@@ -81,18 +85,14 @@ class Field;
 class ValueField;
 class FieldList;
 
-/*
-class Decl;
-class Stmt;
-class Expr;
-class ExprList;
-class BinOp;
-*/
-
+class Ty;
+class AbstractSyntax;
 
 class BaseElement {
 public:
   constexpr explicit BaseElement(const Position& pos) noexcept : pos_(pos) {}
+  virtual bool checkType(AbstractSyntax *syntax) const = 0;
+
   friend std::ostream& operator<<(std::ostream& os,
                                   const BaseElement& elem) noexcept {
     elem.print(os);
@@ -126,6 +126,8 @@ public:
   explicit DeclList(const Position& pos, vector<Declaration*>&& decls) noexcept
       : Program(pos), decls_(std::move(decls)) {}
 
+  bool checkType(AbstractSyntax *syntax) const override;
+
   void print(std::ostream& os) const override;
   bool operator==(const BaseElement& _other) const noexcept override;
 
@@ -136,12 +138,16 @@ protected:
 class Expr : public Program {
 public:
   using Program::Program;
+
+  virtual Ty *evalType(AbstractSyntax *syntax) const = 0;
 };
 
 class NilExpr : public Expr {
 public:
   using Expr::Expr;
   void print(std::ostream& os) const override;
+
+  bool checkType(AbstractSyntax *syntax) const override { return false; }
 };
 
 class IntExpr : public Expr {
@@ -154,6 +160,8 @@ public:
     return Expr::operator==(other) &&
         value_ == dynamic_cast<decltype(*this)>(other).value_;
   }
+  bool checkType(AbstractSyntax *syntax) const override { return true; }
+  Ty *evalType(AbstractSyntax *syntax) const override;
 
 protected:
   int value_;
@@ -168,6 +176,8 @@ public:
     return Expr::operator==(other) &&
         value_ == dynamic_cast<decltype(*this)>(other).value_;
   }
+  bool checkType(AbstractSyntax *syntax) const override { return true; }
+  Ty *evalType(AbstractSyntax *syntax) const override;
 
 protected:
   string value_;
@@ -188,6 +198,8 @@ public:
           *size_ == *other.size_ && *init_ == *other.init_;
     }
   }
+  bool checkType(AbstractSyntax *syntax) const override;
+  Ty *evalType(AbstractSyntax *syntax) const override;
 
 protected:
   string typename_;
@@ -635,8 +647,126 @@ protected:
   vector<Field*> fields_;
 };
 
+class Ty {
+public:
+  virtual constexpr bool isInt() const noexcept { return false; }
+  virtual constexpr bool isStr() const noexcept { return false; }
+  virtual constexpr bool isRecord() const noexcept { return false; }
+  virtual constexpr bool isArray() const noexcept { return false; }
+  virtual constexpr bool isVoid() const noexcept { return false; }
+  virtual constexpr bool is(const Ty *other) const noexcept {
+    return other != nullptr && typeid(*this) == typeid(*other);
+  }
+};
+
+class TyField {
+public:
+  explicit TyField(string name, Ty *type) noexcept
+      : name_(std::move(name)), type_(type) {}
+protected:
+  string name_;
+  Ty *type_;
+};
+
+class RecordTy : public Ty {
+public:
+  explicit RecordTy(vector<TyField>&& fields) noexcept
+      : fields_(std::move(fields)) {}
+  constexpr bool isRecord() const noexcept override { return true; }
+  virtual constexpr bool is(const Ty *other) const noexcept {
+    return false;
+  }
+protected:
+  vector<TyField> fields_;
+};
+
+class ArrayTy : public Ty {
+public:
+  explicit ArrayTy(Ty *type) noexcept : type_(type) {}
+  constexpr bool isArray() const noexcept override { return true; }
+  virtual constexpr bool is(const Ty *other) const noexcept {
+    return Ty::is(other) &&
+        type_->is(dynamic_cast<const ArrayTy*>(other).type_);
+  }
+protected:
+  Ty *type_;
+};
+
+class AliasTy : public Ty {
+public:
+  explicit AliasTy(string name, Ty *type) noexcept
+      : name_(std::move(name)), type_(type) {}
+  virtual constexpr bool isInt() const noexcept { return type_->isInt(); }
+  virtual constexpr bool isStr() const noexcept { return type_->isStr(); }
+  virtual constexpr bool isRecord() const noexcept { return type_->isRecord(); }
+  virtual constexpr bool isArray() const noexcept { return type_->isArray(); }
+  virtual constexpr bool is(const Ty *other) const noexcept { return other->is(type_); }
+protected:
+  string name_;
+  Ty *type_;
+};
+
+struct IntTy : public Ty {
+  virtual constexpr bool isInt() const noexcept { return true; }
+};
+struct StrTy : public Ty {
+  virtual constexpr bool isStr() const noexcept { return true; }
+};
+struct VoidTy : public Ty {
+  virtual constexpr bool isVoid() const noexcept { return true; }
+};
+struct NilTy : public Ty {
+  virtual constexpr bool is(const Ty *other) const noexcept { return false; }
+};
+
+class Func {
+public:
+  explicit Func(vector<TyField>&& fields, Ty *result) noexcept
+      : fields_(std::move(fields)), result_(result) {}
+protected:
+  vector<TyField> fields_;
+  Ty *result_;
+};
+
+class SymbolTable {
+public:
+  Ty *type(const string& key) const {
+    if (auto it = types_.find(key); it != types_.end())
+      return it->second;
+    else
+      return nullptr;
+  }
+  Ty *var(const string& key) const {
+    if (auto it = vars_.find(key); it != vars_.end())
+      return it->second;
+    else
+      return nullptr;
+  }
+  Func *func(const string& key) const {
+    if (auto it = funcs_.find(key); it != funcs_.end())
+      return it->second;
+    else
+      return nullptr;
+  }
+
+  void type(const string& key, Ty *type) { types_.emplace(key, type); }
+  void var(const string& key, Ty *var) { vars_.emplace(key, var); }
+  void func(const string& key, Func *func) { funcs_.emplace(key, func); }
+
+protected:
+  unordered_map<string, Ty*> types_;
+  unordered_map<string, Ty*> vars_;
+  unordered_map<string, Func*> funcs_;
+};
+
 class AbstractSyntax {
 public:
+  constexpr explicit AbstractSyntax() noexcept
+      : types_({std::make_unique<VoidTy>(),
+                std::make_unique<IntTy>(),
+                std::make_unique<StrTy>(),
+                std::make_unique<NilTy>()}),
+        program_(nullptr) { }
   template <typename T, typename... Args>
   T *elem(Args&&... args) {
     elements_.emplace_back(std::make_unique<T>(std::forward<Args&&>(args)...));
@@ -644,9 +774,54 @@ public:
   }
 
   Program *abstract(const grammar::ParsedTerm *term);
+  bool checkType();
+
+  Ty *typeOf(const string& name) const {
+    for (const auto& table : symbolTables_)
+      if (auto ty = table.type(name))
+        return ty;
+    return nullptr;
+  }
+
+  Ty *varOf(const string& name) const {
+    for (const auto& table : symbolTables_)
+      if (auto ty = table.var(name))
+        return ty;
+    return nullptr;
+  }
+
+  Func *funcOf(const string& name) const {
+    for (const auto& table : symbolTables_)
+      if (auto ty = table.func(name))
+        return ty;
+    return nullptr;
+  }
+
+  void pushSymbolTable() { symbolTables_.emplace_front(); }
+  void popSymbolTable() { symbolTables_.pop_front(); }
+
+  constexpr Ty *voidTy() const noexcept { return types_[0].get(); }
+  constexpr Ty *intTy() const noexcept { return types_[1].get(); }
+  constexpr Ty *strTy() const noexcept { return types_[2].get(); }
+  constexpr Ty *nilTy() const noexcept { return types_[3].get(); }
+  Ty *recordTy(vector<TyField>&& fields) {
+    return types_.emplace_back(std::make_unique<RecordTy>(std::move(fields))).get();
+  }
+  Ty *arrayTy(Ty *type) {
+    return types_.emplace_back(std::make_unique<ArrayTy>(type)).get();
+  }
+  Ty *aliasTy(string name, Ty *type) {
+    return types_.emplace_back(std::make_unique<AliasTy>(std::move(name), type)).get();
+  }
+  Func *func(vector<TyField>&& fields, Ty *result) {
+    return funcs_.emplace_back(std::make_unique<Func>(std::move(fields), result)).get();
+  }
 
 protected:
+  deque<SymbolTable> symbolTables_;
   vector<unique_ptr<BaseElement>> elements_;
+  vector<unique_ptr<Ty>> types_;
+  vector<unique_ptr<Func>> funcs_;
   Program *program_;
 };
 
